@@ -5,6 +5,7 @@ import {
   FileText,
   Info,
   Layers,
+  LocateFixed,
   MapPinned,
   Plus,
   RefreshCw,
@@ -49,7 +50,7 @@ export default function LeftPanel() {
     loadAssetMetadata,
     deleteAsset,
   } = useAssetsStore()
-  const { layers, addLayer, updateLayer, removeLayer } = useLayersStore()
+  const { layers, addLayer, updateLayer, removeLayer, zoomToLayer } = useLayersStore()
 
   const canMap = (asset: Asset) => asset.type === 'raster' || asset.type === 'geojson'
 
@@ -222,6 +223,15 @@ export default function LeftPanel() {
                           onClick={() => updateLayer(layer.id, { visible: !layer.visible })}
                         >
                           {layer.visible ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Zoom to ${layer.name}`}
+                          disabled={!layer.bounds}
+                          onClick={() => zoomToLayer(layer.id)}
+                        >
+                          <LocateFixed aria-hidden="true" />
                         </Button>
                         <Button variant="ghost" size="icon" aria-label="Remove layer" onClick={() => removeLayer(layer.id)}>
                           <Trash2 aria-hidden="true" />

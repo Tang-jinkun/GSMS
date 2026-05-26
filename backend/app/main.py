@@ -32,6 +32,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MODEL_REGISTRY = [
+    {
+        "id": "carbon",
+        "name": "Carbon Storage and Sequestration",
+        "description": "Estimate carbon storage from a baseline LULC raster and carbon pools table.",
+        "status": "stub",
+        "inputs": [
+            {
+                "id": "lulc_bas_asset_id",
+                "label": "Baseline LULC raster",
+                "asset_type": "raster",
+                "required": True,
+            },
+            {
+                "id": "carbon_pools_asset_id",
+                "label": "Carbon pools table",
+                "asset_type": "table",
+                "required": True,
+            },
+            {
+                "id": "results_suffix",
+                "label": "Results suffix",
+                "type": "string",
+                "required": False,
+                "default": "mvp",
+            },
+        ],
+        "outputs": [
+            {
+                "name": "carbon_preview.geojson",
+                "type": "geojson",
+                "map_default": True,
+            },
+            {
+                "name": "dummy_output.txt",
+                "type": "document",
+                "map_default": False,
+            },
+        ],
+    }
+]
+
 
 def infer_asset_type(filename: str) -> str:
     suffix = Path(filename).suffix.lower()
@@ -129,7 +171,7 @@ def read_asset_metadata(path: Path) -> dict:
         return metadata
 
     if suffix in {".geojson", ".json"}:
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
             data = json.load(handle)
         features = data.get("features", []) if data.get("type") == "FeatureCollection" else []
         bounds = []
@@ -176,9 +218,101 @@ def read_asset_metadata(path: Path) -> dict:
     return metadata
 
 
+def read_geojson_asset(path: Path) -> dict:
+    suffix = path.suffix.lower()
+    if suffix not in {".geojson", ".json"}:
+        raise HTTPException(status_code=400, detail="Asset is not a GeoJSON file")
+
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid GeoJSON: {exc}") from exc
+
+    geojson_type = data.get("type")
+    if geojson_type == "FeatureCollection":
+        return data
+    if geojson_type == "Feature":
+        return {"type": "FeatureCollection", "features": [data]}
+    if geojson_type in {"Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon"}:
+        return {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "properties": {},
+                "geometry": data,
+            }],
+        }
+    raise HTTPException(status_code=400, detail="Unsupported GeoJSON object")
+
+
+def asset_summary(path: Path) -> dict:
+    summary = {
+        "id": path.name,
+        "name": path.name,
+        "type": infer_asset_type(path.name),
+        "path": str(path),
+        "size": path.stat().st_size,
+    }
+
+    if path.suffix.lower() in {".geojson", ".json", ".tif", ".tiff"}:
+        try:
+            metadata = read_asset_metadata(path)
+            if metadata.get("bounds"):
+                summary["bounds"] = metadata["bounds"]
+            if metadata.get("crs"):
+                summary["crs"] = metadata["crs"]
+        except Exception:
+            pass
+    return summary
+
+
+def get_job_output_path(job_id: str, filename: str) -> Path:
+    safe_name = Path(filename).name
+    output_path = JOBS_DIR / job_id / "outputs" / safe_name
+    if not output_path.exists() or not output_path.is_file():
+        raise HTTPException(status_code=404, detail="Output not found")
+    return output_path
+
+
+def output_summary(job_id: str, path: Path) -> dict:
+    summary = {
+        "id": f"{job_id}:{path.name}",
+        "job_id": job_id,
+        "name": path.name,
+        "type": infer_asset_type(path.name),
+        "size": path.stat().st_size,
+        "download_url": f"/api/jobs/{job_id}/outputs/{path.name}/download",
+    }
+    if path.suffix.lower() in {".geojson", ".json"}:
+        try:
+            metadata = read_asset_metadata(path)
+            summary["geojson_url"] = f"/api/jobs/{job_id}/outputs/{path.name}/geojson"
+            if metadata.get("bounds"):
+                summary["bounds"] = metadata["bounds"]
+            if metadata.get("crs"):
+                summary["crs"] = metadata["crs"]
+        except Exception:
+            pass
+    return summary
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/models")
+async def list_models():
+    return MODEL_REGISTRY
+
+
+@app.get("/api/models/{model_id}/schema")
+async def model_schema(model_id: str):
+    for model in MODEL_REGISTRY:
+        if model["id"] == model_id:
+            return model
+    raise HTTPException(status_code=404, detail="Model not found")
 
 
 @app.get("/api/assets")
@@ -186,13 +320,7 @@ async def list_assets():
     items = []
     for p in sorted(ASSETS_DIR.iterdir()):
         if p.is_file():
-            items.append({
-                "id": p.name,
-                "name": p.name,
-                "type": infer_asset_type(p.name),
-                "path": str(p),
-                "size": p.stat().st_size,
-            })
+            items.append(asset_summary(p))
     return items
 
 
@@ -205,25 +333,25 @@ async def asset_metadata(asset_id: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/assets/{asset_id}/geojson")
+async def asset_geojson(asset_id: str):
+    asset_path = get_asset_path(asset_id)
+    return read_geojson_asset(asset_path)
+
+
 @app.post("/api/assets/upload")
 async def upload_asset(file: UploadFile = File(...)):
     filename = file.filename
     dest = ASSETS_DIR / filename
     if dest.exists():
-        # avoid overwrite, use uuid suffix
-        dest = ASSETS_DIR / f"{filename}.{uuid.uuid4().hex}"
+        original = Path(filename)
+        dest = ASSETS_DIR / f"{original.stem}.{uuid.uuid4().hex}{original.suffix}"
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return {
-        "id": dest.name,
-        "name": dest.name,
-        "type": infer_asset_type(dest.name),
-        "path": str(dest),
-        "size": dest.stat().st_size,
-    }
+    return asset_summary(dest)
 
 
 @app.delete("/api/assets/{asset_id}")
@@ -240,7 +368,7 @@ async def create_job(payload: dict):
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     # write job.json
-    (job_dir / "job.json").write_text(str(payload), encoding="utf-8")
+    (job_dir / "job.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     # create run.log placeholder
     (job_dir / "run.log").write_text("Job created\n", encoding="utf-8")
 
@@ -290,20 +418,17 @@ async def job_outputs(job_id: str):
     items = []
     for path in sorted(outputs_dir.iterdir()):
         if path.is_file():
-            items.append({
-                "id": path.name,
-                "name": path.name,
-                "type": infer_asset_type(path.name),
-                "size": path.stat().st_size,
-                "download_url": f"/api/jobs/{job_id}/outputs/{path.name}/download",
-            })
+            items.append(output_summary(job_id, path))
     return items
 
 
 @app.get("/api/jobs/{job_id}/outputs/{filename}/download")
 async def download_job_output(job_id: str, filename: str):
-    safe_name = Path(filename).name
-    output_path = JOBS_DIR / job_id / "outputs" / safe_name
-    if not output_path.exists() or not output_path.is_file():
-        raise HTTPException(status_code=404, detail="Output not found")
-    return FileResponse(str(output_path), filename=safe_name)
+    output_path = get_job_output_path(job_id, filename)
+    return FileResponse(str(output_path), filename=output_path.name)
+
+
+@app.get("/api/jobs/{job_id}/outputs/{filename}/geojson")
+async def job_output_geojson(job_id: str, filename: str):
+    output_path = get_job_output_path(job_id, filename)
+    return read_geojson_asset(output_path)

@@ -9,6 +9,8 @@ export type Asset = {
   size?: number
   path?: string
   source?: 'backend' | 'sample'
+  bounds?: number[] | null
+  crs?: string | null
 }
 
 export type AssetMetadata = Asset & {
@@ -36,16 +38,28 @@ export type Layer = {
   type: 'raster' | 'geojson'
   visible: boolean
   opacity: number
+  geojsonUrl?: string
+  bounds?: number[] | null
+}
+
+export type ZoomRequest = {
+  layerId: string
+  bounds: number[]
+  nonce: number
 }
 
 export type JobStatus = 'idle' | 'running' | 'succeeded' | 'failed'
 
 export type JobOutput = {
   id: string
+  jobId?: string
   name: string
   type: AssetType
   size?: number
   downloadUrl: string
+  geojsonUrl?: string
+  bounds?: number[] | null
+  crs?: string | null
 }
 
 type Stores = {
@@ -57,6 +71,7 @@ type Stores = {
   metadataStatus: Record<string, 'loading' | 'ready' | 'error'>
   metadataError: Record<string, string>
   layers: Layer[]
+  zoomRequest?: ZoomRequest
   activeJobId?: string
   activeJobStatus: JobStatus
   logs: string
@@ -65,9 +80,12 @@ type Stores = {
   uploadAsset: (file: File) => Promise<void>
   loadAssetMetadata: (assetId: string) => Promise<void>
   deleteAsset: (assetId: string) => Promise<void>
+  useSampleData: () => void
   addLayer: (asset: Asset) => void
+  addOutputLayer: (output: JobOutput) => void
   updateLayer: (layerId: string, patch: Partial<Layer>) => void
   removeLayer: (layerId: string) => void
+  zoomToLayer: (layerId: string) => void
   runCarbonJob: (inputs: Record<string, string | boolean | number | undefined>) => Promise<void>
   loadJobOutputs: (jobId: string) => Promise<void>
 }
@@ -132,18 +150,38 @@ function normalizeAsset(asset: Partial<Asset>): Asset {
     size: asset.size,
     path: asset.path,
     source: asset.source ?? 'backend',
+    bounds: asset.bounds,
+    crs: asset.crs,
   }
 }
 
-function normalizeOutput(output: { id?: string; name?: string; type?: AssetType; size?: number; download_url?: string }, apiBaseUrl: string): JobOutput {
+function normalizeOutput(
+  output: {
+    id?: string
+    job_id?: string
+    name?: string
+    type?: AssetType
+    size?: number
+    download_url?: string
+    geojson_url?: string
+    bounds?: number[] | null
+    crs?: string | null
+  },
+  apiBaseUrl: string,
+): JobOutput {
   const name = String(output.name ?? output.id)
   const downloadPath = output.download_url ?? ''
+  const geojsonPath = output.geojson_url
   return {
     id: String(output.id ?? name),
+    jobId: output.job_id,
     name,
     type: (output.type ?? inferAssetType(name)) as AssetType,
     size: output.size,
     downloadUrl: downloadPath.startsWith('http') ? downloadPath : `${apiBaseUrl}${downloadPath}`,
+    geojsonUrl: geojsonPath ? (geojsonPath.startsWith('http') ? geojsonPath : `${apiBaseUrl}${geojsonPath}`) : undefined,
+    bounds: output.bounds,
+    crs: output.crs,
   }
 }
 
@@ -165,6 +203,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
   const [metadataStatus, setMetadataStatus] = React.useState<Record<string, 'loading' | 'ready' | 'error'>>({})
   const [metadataError, setMetadataError] = React.useState<Record<string, string>>({})
   const [layers, setLayers] = React.useState<Layer[]>([])
+  const [zoomRequest, setZoomRequest] = React.useState<ZoomRequest>()
   const [activeJobId, setActiveJobId] = React.useState<string>()
   const [activeJobStatus, setActiveJobStatus] = React.useState<JobStatus>('idle')
   const [logs, setLogs] = React.useState('No job has been started.')
@@ -257,6 +296,42 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     })
   }, [apiBaseUrl, assets])
 
+  const useSampleData = React.useCallback(() => {
+    setAssets(prev => {
+      const existingIds = new Set(prev.map(asset => asset.id))
+      return [...fallbackAssets.filter(asset => !existingIds.has(asset.id)), ...prev]
+    })
+    setAssetMetadata(prev => ({ ...fallbackMetadata, ...prev }))
+    setMetadataStatus(prev => ({
+      ...prev,
+      ...Object.fromEntries(Object.keys(fallbackMetadata).map(assetId => [assetId, 'ready' as const])),
+    }))
+    setAssetsError(undefined)
+    setLayers(prev => {
+      const next = [...prev]
+      const addSampleLayer = (asset: Asset) => {
+        const layerId = `layer-${asset.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+        if (next.some(layer => layer.id === layerId)) return
+        next.unshift({
+          id: layerId,
+          name: asset.name,
+          assetId: asset.id,
+          type: asset.type === 'raster' ? 'raster' : 'geojson',
+          visible: true,
+          opacity: asset.type === 'raster' ? 0.5 : 0.86,
+          bounds: fallbackMetadata[asset.id]?.bounds,
+        })
+      }
+      fallbackAssets.filter(asset => asset.type === 'raster' || asset.type === 'geojson').forEach(addSampleLayer)
+      return next
+    })
+    setZoomRequest({
+      layerId: 'sample-workspace',
+      bounds: [-92, 35, -77, 44],
+      nonce: Date.now(),
+    })
+  }, [])
+
   const addLayer = React.useCallback((asset: Asset) => {
     if (asset.type !== 'raster' && asset.type !== 'geojson') return
     setLayers(prev => {
@@ -270,10 +345,43 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
           type: asset.type === 'raster' ? 'raster' : 'geojson',
           visible: true,
           opacity: asset.type === 'raster' ? 0.64 : 0.82,
+          bounds: asset.bounds ?? fallbackMetadata[asset.id]?.bounds,
+          geojsonUrl: asset.type === 'geojson' && asset.source === 'backend'
+            ? `${apiBaseUrl}/api/assets/${encodeURIComponent(asset.id)}/geojson`
+            : undefined,
         },
         ...prev,
       ]
     })
+  }, [apiBaseUrl])
+
+  const addOutputLayer = React.useCallback((output: JobOutput) => {
+    if (output.type !== 'geojson' || !output.geojsonUrl) return
+    setLayers(prev => {
+      const layerKey = `${output.jobId ?? 'job'}-${output.id}-${output.name}`
+      const layerId = `output-${layerKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+      if (prev.some(layer => layer.id === layerId)) return prev
+      return [
+        {
+          id: layerId,
+          name: output.name,
+          assetId: layerKey,
+          type: 'geojson',
+          visible: true,
+          opacity: 0.82,
+          bounds: output.bounds,
+          geojsonUrl: output.geojsonUrl,
+        },
+        ...prev,
+      ]
+    })
+    if (output.bounds?.length === 4) {
+      setZoomRequest({
+        layerId: output.id,
+        bounds: output.bounds,
+        nonce: Date.now(),
+      })
+    }
   }, [])
 
   const updateLayer = React.useCallback((layerId: string, patch: Partial<Layer>) => {
@@ -283,6 +391,16 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
   const removeLayer = React.useCallback((layerId: string) => {
     setLayers(prev => prev.filter(layer => layer.id !== layerId))
   }, [])
+
+  const zoomToLayer = React.useCallback((layerId: string) => {
+    const layer = layers.find(item => item.id === layerId)
+    if (!layer?.bounds || layer.bounds.length !== 4) return
+    setZoomRequest({
+      layerId,
+      bounds: layer.bounds,
+      nonce: Date.now(),
+    })
+  }, [layers])
 
   const runCarbonJob = React.useCallback(async (inputs: Record<string, string | boolean | number | undefined>) => {
     setActiveJobStatus('running')
@@ -355,6 +473,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     metadataStatus,
     metadataError,
     layers,
+    zoomRequest,
     activeJobId,
     activeJobStatus,
     logs,
@@ -363,9 +482,12 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     uploadAsset,
     loadAssetMetadata,
     deleteAsset,
+    useSampleData,
     addLayer,
+    addOutputLayer,
     updateLayer,
     removeLayer,
+    zoomToLayer,
     runCarbonJob,
     loadJobOutputs,
   }
@@ -392,6 +514,7 @@ export function useAssetsStore() {
     uploadAsset: ctx.uploadAsset,
     loadAssetMetadata: ctx.loadAssetMetadata,
     deleteAsset: ctx.deleteAsset,
+    useSampleData: ctx.useSampleData,
   }
 }
 
@@ -399,9 +522,12 @@ export function useLayersStore() {
   const ctx = useStores()
   return {
     layers: ctx.layers,
+    zoomRequest: ctx.zoomRequest,
     addLayer: ctx.addLayer,
+    addOutputLayer: ctx.addOutputLayer,
     updateLayer: ctx.updateLayer,
     removeLayer: ctx.removeLayer,
+    zoomToLayer: ctx.zoomToLayer,
   }
 }
 

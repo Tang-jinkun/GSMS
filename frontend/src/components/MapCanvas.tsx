@@ -18,6 +18,13 @@ const demoGeoJson = {
   ],
 } as GeoJSON.FeatureCollection
 
+type SelectedFeature = {
+  layerId: string
+  layerName: string
+  lngLat: [number, number]
+  properties: Record<string, unknown>
+}
+
 export default function MapCanvas() {
   const mapRef = React.useRef<maplibregl.Map | null>(null)
   const containerRef = React.useRef<HTMLDivElement | null>(null)
@@ -25,7 +32,8 @@ export default function MapCanvas() {
   const [ready, setReady] = React.useState(false)
   const [cursor, setCursor] = React.useState('--, --')
   const [zoom, setZoom] = React.useState('1.00')
-  const { layers } = useLayersStore()
+  const [selectedFeature, setSelectedFeature] = React.useState<SelectedFeature>()
+  const { layers, zoomRequest } = useLayersStore()
 
   React.useEffect(() => {
     if (typeof window === 'undefined' || mapRef.current || !containerRef.current) return
@@ -96,7 +104,7 @@ export default function MapCanvas() {
             paint: { 'raster-opacity': layer.opacity },
           })
         } else {
-          map.addSource(sourceId, { type: 'geojson', data: demoGeoJson })
+          map.addSource(sourceId, { type: 'geojson', data: layer.geojsonUrl ?? demoGeoJson })
           map.addLayer({
             id: `${layer.id}-fill`,
             type: 'fill',
@@ -116,6 +124,31 @@ export default function MapCanvas() {
               'line-opacity': layer.opacity,
             },
           })
+
+          const selectFeature = (event: maplibregl.MapLayerMouseEvent) => {
+            const feature = event.features?.[0]
+            if (!feature) return
+            setSelectedFeature({
+              layerId: layer.id,
+              layerName: layer.name,
+              lngLat: [event.lngLat.lng, event.lngLat.lat],
+              properties: { ...(feature.properties ?? {}) },
+            })
+          }
+
+          const setPointer = () => {
+            map.getCanvas().style.cursor = 'pointer'
+          }
+          const clearPointer = () => {
+            map.getCanvas().style.cursor = ''
+          }
+
+          map.on('click', layer.id, selectFeature)
+          map.on('click', `${layer.id}-fill`, selectFeature)
+          map.on('mouseenter', layer.id, setPointer)
+          map.on('mouseenter', `${layer.id}-fill`, setPointer)
+          map.on('mouseleave', layer.id, clearPointer)
+          map.on('mouseleave', `${layer.id}-fill`, clearPointer)
         }
         addedLayers.current[layer.id] = true
       }
@@ -139,6 +172,7 @@ export default function MapCanvas() {
     Object.keys(addedLayers.current).forEach(existingId => {
       if (layers.some(layer => layer.id === existingId)) return
 
+      setSelectedFeature(current => (current?.layerId === existingId ? undefined : current))
       if (map.getLayer(existingId)) map.removeLayer(existingId)
       if (map.getLayer(`${existingId}-fill`)) map.removeLayer(`${existingId}-fill`)
       const sourceId = `src-${existingId}`
@@ -152,6 +186,35 @@ export default function MapCanvas() {
       delete addedLayers.current[existingId]
     })
   }, [layers, ready])
+
+  React.useEffect(() => {
+    if (!selectedFeature) return
+    const layer = layers.find(item => item.id === selectedFeature.layerId)
+    if (!layer || !layer.visible) {
+      setSelectedFeature(undefined)
+    }
+  }, [layers, selectedFeature])
+
+  React.useEffect(() => {
+    const map = mapRef.current
+    if (!map || !ready || !zoomRequest) return
+    const [west, south, east, north] = zoomRequest.bounds
+    if (![west, south, east, north].every(Number.isFinite)) return
+
+    const minSpan = 0.01
+    const adjustedWest = west === east ? west - minSpan : west
+    const adjustedEast = west === east ? east + minSpan : east
+    const adjustedSouth = south === north ? south - minSpan : south
+    const adjustedNorth = south === north ? north + minSpan : north
+
+    map.fitBounds(
+      [
+        [adjustedWest, adjustedSouth],
+        [adjustedEast, adjustedNorth],
+      ],
+      { padding: 80, duration: 650, maxZoom: 12 },
+    )
+  }, [ready, zoomRequest])
 
   const fitWorkspace = () => {
     mapRef.current?.fitBounds(
@@ -180,6 +243,42 @@ export default function MapCanvas() {
           <LocateFixed aria-hidden="true" />
         </Button>
       </div>
+
+      {selectedFeature && (
+        <div className="absolute right-4 top-20 w-72 rounded-md border border-white/70 bg-white/95 p-3 text-xs shadow-lg backdrop-blur">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">{selectedFeature.layerName}</div>
+              <div className="mt-0.5 text-[11px] text-slate-500">
+                {selectedFeature.lngLat[0].toFixed(4)}, {selectedFeature.lngLat[1].toFixed(4)}
+              </div>
+            </div>
+            <button
+              className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Close feature properties"
+              onClick={() => setSelectedFeature(undefined)}
+            >
+              x
+            </button>
+          </div>
+          <div className="max-h-48 overflow-auto rounded border border-slate-200 bg-slate-50">
+            {Object.keys(selectedFeature.properties).length === 0 ? (
+              <div className="p-2 text-slate-500">No properties</div>
+            ) : (
+              Object.entries(selectedFeature.properties).map(([key, value]) => (
+                <div key={key} className="grid grid-cols-[88px_minmax(0,1fr)] border-b border-slate-200 last:border-b-0">
+                  <div className="truncate px-2 py-1.5 font-medium text-slate-500" title={key}>
+                    {key}
+                  </div>
+                  <div className="truncate px-2 py-1.5 text-slate-800" title={String(value)}>
+                    {String(value)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between gap-3 rounded-md border border-white/70 bg-white/95 px-3 py-2 text-xs text-slate-600 shadow-sm backdrop-blur">
         <span className="inline-flex min-w-0 items-center gap-2">

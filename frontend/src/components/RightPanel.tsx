@@ -1,23 +1,54 @@
 import React from 'react'
-import { CheckCircle2, Clock3, Database, Download, FileText, Loader2, Play, TriangleAlert } from 'lucide-react'
-import { useAssetsStore, useJobsStore } from '../stores/useStores'
+import { CheckCircle2, Clock3, Database, Download, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
+import { useAssetsStore, useJobsStore, useLayersStore } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
+
+type ModelSchema = {
+  id: string
+  name: string
+  description?: string
+  status?: string
+  inputs?: Array<{ id: string; label: string; required?: boolean }>
+  outputs?: Array<{ name: string; type: string; map_default?: boolean }>
+}
 
 export default function RightPanel() {
   const { assets } = useAssetsStore()
   const { activeJobId, activeJobStatus, logs, outputs, runCarbonJob } = useJobsStore()
+  const { addOutputLayer } = useLayersStore()
   const rasterAssets = assets.filter(asset => asset.type === 'raster')
   const tableAssets = assets.filter(asset => asset.type === 'table')
   const [baselineRaster, setBaselineRaster] = React.useState('')
   const [carbonPools, setCarbonPools] = React.useState('')
   const [resultsSuffix, setResultsSuffix] = React.useState('mvp')
   const [formError, setFormError] = React.useState<string>()
+  const [modelSchema, setModelSchema] = React.useState<ModelSchema>()
+  const [modelSchemaError, setModelSchemaError] = React.useState<string>()
 
   React.useEffect(() => {
     if (!baselineRaster && rasterAssets[0]) setBaselineRaster(rasterAssets[0].id)
     if (!carbonPools && tableAssets[0]) setCarbonPools(tableAssets[0].id)
   }, [baselineRaster, carbonPools, rasterAssets, tableAssets])
+
+  React.useEffect(() => {
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    let cancelled = false
+    fetch(`${apiBaseUrl}/api/models/carbon/schema`)
+      .then(response => {
+        if (!response.ok) throw new Error(`Model schema API returned ${response.status}`)
+        return response.json()
+      })
+      .then((schema: ModelSchema) => {
+        if (!cancelled) setModelSchema(schema)
+      })
+      .catch(error => {
+        if (!cancelled) setModelSchemaError(error instanceof Error ? error.message : 'Unable to load model schema')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const canRun = Boolean(baselineRaster && carbonPools && activeJobStatus !== 'running')
 
@@ -57,9 +88,18 @@ export default function RightPanel() {
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Model
             <select className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200" value="carbon" onChange={() => undefined}>
-              <option value="carbon">Carbon Storage and Sequestration</option>
+              <option value="carbon">{modelSchema?.name ?? 'Carbon Storage and Sequestration'}</option>
             </select>
           </label>
+          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium text-slate-800">{modelSchema?.status ?? 'stub'} runner</span>
+              <span>{modelSchema?.inputs?.filter(input => input.required).length ?? 2} required inputs</span>
+            </div>
+            <p className="mt-1 leading-5">
+              {modelSchema?.description ?? modelSchemaError ?? 'Backend model schema will appear when the API is available.'}
+            </p>
+          </div>
 
           <div className="mt-4 flex flex-col gap-3">
             <AssetSelect
@@ -127,11 +167,22 @@ export default function RightPanel() {
                 <div key={output.id} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white p-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium text-slate-900">{output.name}</div>
-                    <div className="mt-1 text-xs text-slate-500">{formatBytes(output.size)} · {output.type}</div>
+                    <div className="mt-1 text-xs text-slate-500">{formatBytes(output.size)} | {output.type}</div>
                   </div>
-                  <Button variant="outline" size="icon" aria-label={`Download ${output.name}`} onClick={() => window.open(output.downloadUrl, '_blank')}>
-                    <Download aria-hidden="true" />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label={`Add output ${output.name} to map`}
+                      disabled={output.type !== 'geojson' || !output.geojsonUrl}
+                      onClick={() => addOutputLayer(output)}
+                    >
+                      <Plus aria-hidden="true" />
+                    </Button>
+                    <Button variant="outline" size="icon" aria-label={`Download ${output.name}`} onClick={() => window.open(output.downloadUrl, '_blank')}>
+                      <Download aria-hidden="true" />
+                    </Button>
+                  </div>
                 </div>
               ))
             )}

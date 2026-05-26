@@ -7,7 +7,7 @@ import { Button } from './ui'
 import { useAssetsStore, useJobsStore, useLayersStore } from '../stores/useStores'
 
 export default function Layout() {
-  const { assets } = useAssetsStore()
+  const { assets, useSampleData } = useAssetsStore()
   const { layers } = useLayersStore()
   const { activeJobStatus } = useJobsStore()
 
@@ -39,7 +39,7 @@ export default function Layout() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={useSampleData}>
             <FolderUp aria-hidden="true" data-icon="inline-start" />
             Sample data
           </Button>
@@ -49,14 +49,14 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)_400px]">
-        <aside className="min-h-0 border-r border-slate-200 bg-white">
+      <main className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(360px,auto)_minmax(420px,60vh)_minmax(520px,auto)] overflow-auto lg:grid-cols-[320px_minmax(0,1fr)_400px] lg:grid-rows-none lg:overflow-hidden">
+        <aside className="min-h-[360px] border-b border-slate-200 bg-white lg:min-h-0 lg:border-b-0 lg:border-r">
           <LeftPanel />
         </aside>
-        <section className="min-h-0 bg-slate-200">
+        <section className="min-h-[420px] bg-slate-200 lg:min-h-0">
           <MapCanvas />
         </section>
-        <aside className="min-h-0 border-l border-slate-200 bg-white">
+        <aside className="min-h-[520px] border-t border-slate-200 bg-white lg:min-h-0 lg:border-l lg:border-t-0">
           <RightPanel />
         </aside>
       </main>
