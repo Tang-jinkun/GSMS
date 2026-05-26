@@ -1,0 +1,8 @@
+fastapi==0.99.0
+uvicorn[standard]==0.23.0
+python-multipart==0.0.6
+aiofiles==23.1.0
+rasterio==1.3.6
+geopandas==0.13.2
+# natcap.invest may require extra system deps; add when ready
+# natcap.invest==3.6.0
