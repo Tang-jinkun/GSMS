@@ -91,18 +91,28 @@ export default function MapCanvas() {
     layers.forEach(layer => {
       const sourceId = `src-${layer.id}`
       if (!addedLayers.current[layer.id]) {
+        let didAdd = false
         if (layer.type === 'raster') {
-          map.addSource(sourceId, {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-          } as maplibregl.RasterSourceSpecification)
-          map.addLayer({
-            id: layer.id,
-            type: 'raster',
-            source: sourceId,
-            paint: { 'raster-opacity': layer.opacity },
-          })
+          if (layer.rasterUrl && layer.bounds && layer.bounds.length === 4) {
+            const [west, south, east, north] = layer.bounds
+            map.addSource(sourceId, {
+              type: 'image',
+              url: layer.rasterUrl,
+              coordinates: [
+                [west, north],
+                [east, north],
+                [east, south],
+                [west, south],
+              ],
+            } as maplibregl.ImageSourceSpecification)
+            map.addLayer({
+              id: layer.id,
+              type: 'raster',
+              source: sourceId,
+              paint: { 'raster-opacity': layer.opacity },
+            })
+            didAdd = true
+          }
         } else {
           map.addSource(sourceId, { type: 'geojson', data: layer.geojsonUrl ?? demoGeoJson })
           map.addLayer({
@@ -149,8 +159,12 @@ export default function MapCanvas() {
           map.on('mouseenter', `${layer.id}-fill`, setPointer)
           map.on('mouseleave', layer.id, clearPointer)
           map.on('mouseleave', `${layer.id}-fill`, clearPointer)
+
+          didAdd = true
         }
-        addedLayers.current[layer.id] = true
+        if (didAdd) {
+          addedLayers.current[layer.id] = true
+        }
       }
 
       const visibility = layer.visible ? 'visible' : 'none'

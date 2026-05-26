@@ -12,6 +12,8 @@ import sys
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "data" / "projects" / "default" / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+ASSET_PREVIEWS_DIR = Path(__file__).resolve().parents[1] / "data" / "projects" / "default" / "assets_previews"
+ASSET_PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR = Path(__file__).resolve().parents[1] / "data" / "projects" / "default" / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -27,6 +29,7 @@ app.add_middleware(
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
     ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -190,11 +193,35 @@ def read_asset_metadata(path: Path) -> dict:
     if suffix in {".tif", ".tiff"}:
         try:
             import rasterio
+            from rasterio.warp import transform_bounds
 
             with rasterio.open(path) as dataset:
+                native_bounds = [
+                    dataset.bounds.left,
+                    dataset.bounds.bottom,
+                    dataset.bounds.right,
+                    dataset.bounds.top,
+                ]
+                bounds_wgs84 = None
+                if dataset.crs:
+                    try:
+                        west, south, east, north = transform_bounds(
+                            dataset.crs,
+                            "EPSG:4326",
+                            native_bounds[0],
+                            native_bounds[1],
+                            native_bounds[2],
+                            native_bounds[3],
+                            densify_pts=21,
+                        )
+                        bounds_wgs84 = [west, south, east, north]
+                    except Exception:
+                        bounds_wgs84 = None
+
                 metadata.update({
                     "crs": str(dataset.crs) if dataset.crs else None,
-                    "bounds": [dataset.bounds.left, dataset.bounds.bottom, dataset.bounds.right, dataset.bounds.top],
+                    "bounds": native_bounds,
+                    "bounds_wgs84": bounds_wgs84,
                     "width": dataset.width,
                     "height": dataset.height,
                     "band_count": dataset.count,
@@ -255,16 +282,76 @@ def asset_summary(path: Path) -> dict:
         "size": path.stat().st_size,
     }
 
+    if path.suffix.lower() in {".tif", ".tiff"}:
+        summary["preview_url"] = f"/api/assets/{path.name}/preview.png"
+
     if path.suffix.lower() in {".geojson", ".json", ".tif", ".tiff"}:
         try:
             metadata = read_asset_metadata(path)
             if metadata.get("bounds"):
                 summary["bounds"] = metadata["bounds"]
+            if metadata.get("bounds_wgs84"):
+                summary["bounds_wgs84"] = metadata["bounds_wgs84"]
             if metadata.get("crs"):
                 summary["crs"] = metadata["crs"]
         except Exception:
             pass
     return summary
+
+
+def _generate_raster_preview_png(source_path: Path, dest_path: Path, max_size: int) -> None:
+    import numpy as np
+    from PIL import Image
+    import rasterio
+    from rasterio.enums import Resampling
+
+    safe_max_size = max(128, min(int(max_size), 2048))
+    with rasterio.open(source_path) as dataset:
+        scale = min(safe_max_size / dataset.width, safe_max_size / dataset.height, 1.0)
+        out_width = max(1, int(dataset.width * scale))
+        out_height = max(1, int(dataset.height * scale))
+
+        indexes = [1, 2, 3] if dataset.count >= 3 else [1]
+        data = dataset.read(
+            indexes=indexes,
+            out_shape=(len(indexes), out_height, out_width),
+            resampling=Resampling.nearest,
+            masked=True,
+        )
+
+        mask = np.ma.getmaskarray(data[0])
+        alpha = np.where(mask, 0, 255).astype(np.uint8)
+
+        filled = data.astype(np.float32)
+        filled = np.ma.filled(filled, np.nan)
+
+        def scale_band(band: np.ndarray) -> np.ndarray:
+            valid = band[np.isfinite(band)]
+            if valid.size == 0:
+                return np.zeros(band.shape, dtype=np.uint8)
+            vmin, vmax = np.nanpercentile(valid, [2, 98])
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                vmin = float(np.nanmin(valid))
+                vmax = float(np.nanmax(valid))
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                return np.zeros(band.shape, dtype=np.uint8)
+            scaled = (band - vmin) / (vmax - vmin)
+            scaled = np.clip(scaled, 0, 1)
+            scaled = np.nan_to_num(scaled, nan=0.0, posinf=1.0, neginf=0.0)
+            return (scaled * 255).astype(np.uint8)
+
+        if filled.shape[0] == 1:
+            gray = scale_band(filled[0])
+            rgb = np.stack([gray, gray, gray], axis=-1)
+        else:
+            bands = [scale_band(filled[i]) for i in range(3)]
+            rgb = np.stack(bands, axis=-1)
+
+        rgba = np.dstack([rgb, alpha])
+        img = Image.fromarray(rgba, mode="RGBA")
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest_path, format="PNG", optimize=True)
 
 
 def get_job_output_path(job_id: str, filename: str) -> Path:
@@ -337,6 +424,24 @@ async def asset_metadata(asset_id: str):
 async def asset_geojson(asset_id: str):
     asset_path = get_asset_path(asset_id)
     return read_geojson_asset(asset_path)
+
+
+@app.get("/api/assets/{asset_id}/preview.png")
+async def asset_preview_png(asset_id: str, max_size: int = 1024):
+    asset_path = get_asset_path(asset_id)
+    if asset_path.suffix.lower() not in {".tif", ".tiff"}:
+        raise HTTPException(status_code=400, detail="Asset is not a GeoTIFF")
+
+    preview_path = ASSET_PREVIEWS_DIR / f"{asset_path.name}.png"
+    try:
+        if preview_path.exists() and preview_path.stat().st_mtime >= asset_path.stat().st_mtime:
+            return FileResponse(str(preview_path), media_type="image/png")
+        _generate_raster_preview_png(asset_path, preview_path, max_size=max_size)
+        return FileResponse(str(preview_path), media_type="image/png")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate preview: {exc}")
 
 
 @app.post("/api/assets/upload")

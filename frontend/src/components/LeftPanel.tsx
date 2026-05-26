@@ -213,7 +213,7 @@ export default function LeftPanel() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{layer.name}</div>
-                        <div className="mt-1 text-xs text-slate-500">{layer.type === 'raster' ? 'Raster tile preview' : 'GeoJSON preview'}</div>
+                        <div className="mt-1 text-xs text-slate-500">{layer.type === 'raster' ? 'Raster preview' : 'GeoJSON preview'}</div>
                       </div>
                       <div className="flex items-center gap-1">
                         <Button
@@ -286,6 +286,7 @@ function MetadataDetails({
   const rows = [
     ['Format', metadata.format],
     ['CRS', metadata.crs],
+    ['Bounds (WGS84)', metadata.boundsWgs84?.map(value => Number(value).toFixed(4)).join(', ')],
     ['Bounds', metadata.bounds?.map(value => Number(value).toFixed(4)).join(', ')],
     ['Raster size', metadata.width && metadata.height ? `${metadata.width} x ${metadata.height}` : undefined],
     ['Bands', metadata.band_count ? String(metadata.band_count) : undefined],

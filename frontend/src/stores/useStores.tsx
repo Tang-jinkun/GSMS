@@ -10,13 +10,16 @@ export type Asset = {
   path?: string
   source?: 'backend' | 'sample'
   bounds?: number[] | null
+  boundsWgs84?: number[] | null
   crs?: string | null
+  previewUrl?: string
 }
 
 export type AssetMetadata = Asset & {
   format?: string
   crs?: string | null
   bounds?: number[] | null
+  boundsWgs84?: number[] | null
   width?: number
   height?: number
   band_count?: number
@@ -39,6 +42,7 @@ export type Layer = {
   visible: boolean
   opacity: number
   geojsonUrl?: string
+  rasterUrl?: string
   bounds?: number[] | null
 }
 
@@ -151,8 +155,29 @@ function normalizeAsset(asset: Partial<Asset>): Asset {
     path: asset.path,
     source: asset.source ?? 'backend',
     bounds: asset.bounds,
+    boundsWgs84: (asset as unknown as { bounds_wgs84?: number[] | null }).bounds_wgs84 ?? asset.boundsWgs84,
     crs: asset.crs,
+    previewUrl: (asset as unknown as { preview_url?: string }).preview_url ?? asset.previewUrl,
   }
+}
+
+function normalizeAssetMetadata(metadata: unknown): AssetMetadata {
+  if (!metadata || typeof metadata !== 'object') {
+    return normalizeAsset({ id: 'unknown', name: 'unknown', type: 'unknown' })
+  }
+  const raw = metadata as Record<string, unknown>
+  const base = normalizeAsset(raw as Partial<Asset>)
+  return {
+    ...(raw as Record<string, unknown>),
+    ...base,
+    boundsWgs84: (raw.bounds_wgs84 as number[] | null | undefined) ?? base.boundsWgs84,
+  } as AssetMetadata
+}
+
+function pickWgs84Bounds(asset: Asset): number[] | null | undefined {
+  if (asset.boundsWgs84?.length === 4) return asset.boundsWgs84
+  if (asset.crs && /4326/.test(asset.crs) && asset.bounds?.length === 4) return asset.bounds
+  return asset.bounds
 }
 
 function normalizeOutput(
@@ -252,7 +277,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await fetch(`${apiBaseUrl}/api/assets/${encodeURIComponent(assetId)}/metadata`)
       if (!response.ok) throw new Error(`Metadata API returned ${response.status}`)
-      const metadata = await response.json()
+      const metadata = normalizeAssetMetadata(await response.json())
       setAssetMetadata(prev => ({ ...prev, [assetId]: metadata }))
       setMetadataStatus(prev => ({ ...prev, [assetId]: 'ready' }))
     } catch (error) {
@@ -337,6 +362,12 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     setLayers(prev => {
       const layerId = `layer-${asset.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
       if (prev.some(layer => layer.id === layerId)) return prev
+
+      const bounds = pickWgs84Bounds(asset) ?? fallbackMetadata[asset.id]?.bounds
+      const rasterUrl = asset.type === 'raster' && asset.source === 'backend'
+        ? `${apiBaseUrl}/api/assets/${encodeURIComponent(asset.id)}/preview.png`
+        : undefined
+
       return [
         {
           id: layerId,
@@ -345,10 +376,11 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
           type: asset.type === 'raster' ? 'raster' : 'geojson',
           visible: true,
           opacity: asset.type === 'raster' ? 0.64 : 0.82,
-          bounds: asset.bounds ?? fallbackMetadata[asset.id]?.bounds,
+          bounds,
           geojsonUrl: asset.type === 'geojson' && asset.source === 'backend'
             ? `${apiBaseUrl}/api/assets/${encodeURIComponent(asset.id)}/geojson`
             : undefined,
+          rasterUrl,
         },
         ...prev,
       ]
