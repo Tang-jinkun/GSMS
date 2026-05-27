@@ -280,6 +280,72 @@ args = {
 - 不要把 InVEST 输出写到上传资产目录。
 - 模型执行失败必须保留 workspace 和日志，方便排查。
 
+### 4.7 Conda / InVEST 运行环境
+
+本项目真实运行 InVEST Carbon 时，应使用项目专用 conda 环境：
+
+```powershell
+conda activate gsms-invest
+```
+
+当前已验证环境位置：
+
+```text
+E:\Anaconda_envs\envs\gsms-invest
+```
+
+已验证核心包版本：
+
+```text
+natcap.invest 3.19.0
+rasterio 1.4.3
+fastapi 0.136.3
+```
+
+Carbon Python 入口已验证可用：
+
+```text
+natcap.invest.carbon.execute
+natcap.invest.carbon.carbon.execute
+```
+
+启动后端时必须使用该环境，而不是系统 Python 或 base 环境：
+
+```powershell
+conda activate gsms-invest
+cd E:\Github\GSMS\backend
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+注意事项：
+
+- `natcap.invest 3.19.0` 通过 conda-forge 安装；不要优先用 pip 在 Windows 上手工拼 GDAL/rasterio 依赖。
+- 创建环境时使用 `python=3.10` 更稳；本机验证过 `python=3.11 + fastapi==0.99.0 + natcap.invest=3.19.0` 会出现依赖冲突。
+- 不要锁定 `fastapi==0.99.0` 给真实 InVEST 环境使用；该版本依赖 Pydantic v1，而 `natcap.invest 3.19.0` 的依赖链需要 Pydantic v2 相关包。当前验证可用的是 `fastapi 0.136.3`。
+- 使用 `conda run -n gsms-invest ...` 时，不要并发启动多个 `conda run` 命令；Windows 下可能争用 `__conda_tmp_*.txt` 临时激活文件。验证脚本优先使用环境内 `python.exe` 绝对路径，或先 `conda activate gsms-invest` 再运行命令。
+- 如果直接调用 `E:\Anaconda_envs\envs\gsms-invest\python.exe` 出现 GDAL/PROJ 环境变量告警，优先改用 `conda activate gsms-invest` 后启动服务，确保 GDAL 环境变量由 conda 正确注入。
+- `backend/requirements.txt` 当前不应被视为真实 InVEST conda 环境的完整锁文件；真实模型运行以 conda 环境为准。
+
+真实 Carbon 验证要求：
+
+```text
+POST /api/jobs with run_mode=real
+-> run.log contains "running natcap.invest.carbon.execute"
+-> run.log contains "InVEST Carbon execution completed"
+-> outputs include real Carbon rasters such as c_storage_bas_*.tif
+-> output preview endpoint returns 200 image/png
+```
+
+已在本机用 Willamette sample data 验证真实运行成功，生成过以下输出：
+
+```text
+c_above_bas_conda_real.tif
+c_below_bas_conda_real.tif
+c_dead_bas_conda_real.tif
+c_soil_bas_conda_real.tif
+c_storage_bas_conda_real.tif
+```
+
 ## 5. WebGIS 特殊注意事项
 
 ### 5.1 Raster 不等于普通图片
@@ -409,7 +475,7 @@ npm run build
 
 截至当前 MVP：
 
-- Carbon 仍是 stub runner，尚未真实调用 `natcap.invest`。
+- Carbon runner 已具备真实 `natcap.invest` 调用路径；使用 `gsms-invest` 环境启动后端并设置 `run_mode=real` 时，已可真实运行 Carbon。默认 `auto` 模式仍允许在缺少 InVEST 的环境中回退到显式 development stub。
 - Raster 图层仍以占位预览为主，真实 GeoTIFF tile 服务尚未完成。
 - SQLite 尚未接入，metadata 主要来自文件扫描。
 - 用户系统、权限系统、多项目管理不在当前阶段范围。
