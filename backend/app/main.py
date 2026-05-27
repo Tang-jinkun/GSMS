@@ -340,6 +340,8 @@ def _generate_raster_preview_png(source_path: Path, dest_path: Path, max_size: i
             scaled = (band - vmin) / (vmax - vmin)
             scaled = np.clip(scaled, 0, 1)
             scaled = np.nan_to_num(scaled, nan=0.0, posinf=1.0, neginf=0.0)
+            # Extra safety: avoid warnings when casting NaN/inf to uint8 on some numpy versions.
+            scaled = np.where(np.isfinite(scaled), scaled, 0.0)
             return (scaled * 255).astype(np.uint8)
 
         if filled.shape[0] == 1:
@@ -428,14 +430,25 @@ async def asset_geojson(asset_id: str):
     return read_geojson_asset(asset_path)
 
 
-@app.get("/api/assets/{asset_id}/preview.png")
-async def asset_preview_png(asset_id: str, max_size: int = 1024):
+@app.api_route("/api/assets/{asset_id}/preview.png", methods=["GET", "HEAD"])
+async def asset_preview_png(asset_id: str, request: Request, max_size: int = 1024):
     asset_path = get_asset_path(asset_id)
     if asset_path.suffix.lower() not in {".tif", ".tiff"}:
         raise HTTPException(status_code=400, detail="Asset is not a GeoTIFF")
 
     preview_path = ASSET_PREVIEWS_DIR / f"{asset_path.name}.png"
     try:
+        if request.method == "HEAD":
+            # Some clients (including map renderers) probe with HEAD before issuing GET.
+            # We avoid expensive generation work here; GET will generate on demand.
+            headers = {"Content-Type": "image/png"}
+            if preview_path.exists():
+                try:
+                    headers["Content-Length"] = str(preview_path.stat().st_size)
+                except Exception:
+                    pass
+            return Response(status_code=200, headers=headers)
+
         if preview_path.exists() and preview_path.stat().st_mtime >= asset_path.stat().st_mtime:
             return FileResponse(str(preview_path), media_type="image/png")
         _generate_raster_preview_png(asset_path, preview_path, max_size=max_size)
