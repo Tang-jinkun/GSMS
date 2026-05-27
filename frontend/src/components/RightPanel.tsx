@@ -1,6 +1,6 @@
 import React from 'react'
 import { CheckCircle2, Clock3, Database, Download, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
-import { useAssetsStore, useJobsStore, useLayersStore } from '../stores/useStores'
+import { useAssetsStore, useJobsStore, useLayersStore, type RunMode } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
 
@@ -27,6 +27,8 @@ export default function RightPanel() {
   const [modelSchemaError, setModelSchemaError] = React.useState<string>()
   const [importingSample, setImportingSample] = React.useState(false)
   const [importSampleError, setImportSampleError] = React.useState<string>()
+  const [runMode, setRunMode] = React.useState<RunMode>('auto')
+  const logsRef = React.useRef<HTMLPreElement | null>(null)
 
   React.useEffect(() => {
     const rasterIds = new Set(rasterAssets.map(asset => asset.id))
@@ -61,6 +63,12 @@ export default function RightPanel() {
 
   const canRun = Boolean(baselineRaster && carbonPools && activeJobStatus !== 'running')
 
+  React.useEffect(() => {
+    const logPanel = logsRef.current
+    if (!logPanel) return
+    logPanel.scrollTop = logPanel.scrollHeight
+  }, [logs])
+
   const handleImportSample = async () => {
     setImportSampleError(undefined)
     setImportingSample(true)
@@ -84,11 +92,14 @@ export default function RightPanel() {
     }
     try {
       await runCarbonJob({
-        lulc_bas_asset_id: baselineRaster,
-        carbon_pools_asset_id: carbonPools,
-        calc_sequestration: false,
-        results_suffix: resultsSuffix,
-        n_workers: -1,
+        runMode,
+        inputs: {
+          lulc_bas_asset_id: baselineRaster,
+          carbon_pools_asset_id: carbonPools,
+          calc_sequestration: false,
+          results_suffix: resultsSuffix.trim() || 'mvp',
+          n_workers: -1,
+        },
       })
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to create job')
@@ -158,6 +169,22 @@ export default function RightPanel() {
               Results suffix
               <Input value={resultsSuffix} onChange={event => setResultsSuffix(event.target.value)} />
             </label>
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Runner mode
+              <select
+                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                value={runMode}
+                onChange={event => setRunMode(event.target.value as RunMode)}
+              >
+                <option value="auto">Auto - use InVEST when available</option>
+                <option value="real">Real - require natcap.invest</option>
+              </select>
+            </label>
+            {runMode === 'real' && (
+              <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-800">
+                Real mode requires the backend to run inside the gsms-invest conda environment.
+              </div>
+            )}
           </div>
 
           {formError && (
@@ -230,7 +257,7 @@ export default function RightPanel() {
             <h3 className="text-sm font-semibold">Logs</h3>
             <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-500">polling</span>
           </div>
-          <pre className="h-72 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100 shadow-inner">
+          <pre ref={logsRef} className="h-72 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100 shadow-inner">
             {logs}
           </pre>
         </section>

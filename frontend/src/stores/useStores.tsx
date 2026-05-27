@@ -68,6 +68,13 @@ export type JobOutput = {
   crs?: string | null
 }
 
+export type RunMode = 'auto' | 'real'
+
+export type CarbonJobRequest = {
+  inputs: Record<string, string | boolean | number | undefined>
+  runMode?: RunMode
+}
+
 type Stores = {
   apiBaseUrl: string
   assets: Asset[]
@@ -92,7 +99,7 @@ type Stores = {
   updateLayer: (layerId: string, patch: Partial<Layer>) => void
   removeLayer: (layerId: string) => void
   zoomToLayer: (layerId: string) => void
-  runCarbonJob: (inputs: Record<string, string | boolean | number | undefined>) => Promise<void>
+  runCarbonJob: (request: CarbonJobRequest) => Promise<void>
   loadJobOutputs: (jobId: string) => Promise<void>
 }
 
@@ -463,14 +470,14 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     })
   }, [layers])
 
-  const runCarbonJob = React.useCallback(async (inputs: Record<string, string | boolean | number | undefined>) => {
+  const runCarbonJob = React.useCallback(async ({ inputs, runMode = 'auto' }: CarbonJobRequest) => {
     setActiveJobStatus('running')
-    setLogs('Creating Carbon job...\n')
+    setLogs(`Creating Carbon job in ${runMode} mode...\n`)
     setOutputs([])
     const response = await fetch(`${apiBaseUrl}/api/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId: 'carbon', inputs }),
+      body: JSON.stringify({ modelId: 'carbon', run_mode: runMode, inputs }),
     })
     if (!response.ok) {
       setActiveJobStatus('failed')
@@ -484,8 +491,16 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     const response = await fetch(`${apiBaseUrl}/api/jobs/${jobId}/outputs`)
     if (!response.ok) throw new Error(`Outputs API returned ${response.status}`)
     const data = await response.json()
-    setOutputs(Array.isArray(data) ? data.map(output => normalizeOutput(output, apiBaseUrl)) : [])
-  }, [apiBaseUrl])
+    const normalized = Array.isArray(data) ? data.map(output => normalizeOutput(output, apiBaseUrl)) : []
+    setOutputs(normalized)
+
+    const primaryRaster =
+      normalized.find(output => output.type === 'raster' && /^c_storage_bas_/i.test(output.name)) ??
+      normalized.find(output => output.type === 'raster' && output.previewUrl)
+    if (primaryRaster) {
+      addOutputLayer(primaryRaster)
+    }
+  }, [addOutputLayer, apiBaseUrl])
 
   React.useEffect(() => {
     if (!activeJobId || activeJobStatus !== 'running') return
