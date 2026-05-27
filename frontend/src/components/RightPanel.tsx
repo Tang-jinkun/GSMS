@@ -14,7 +14,7 @@ type ModelSchema = {
 }
 
 export default function RightPanel() {
-  const { assets } = useAssetsStore()
+  const { assets, loadAssets } = useAssetsStore()
   const { activeJobId, activeJobStatus, logs, outputs, runCarbonJob } = useJobsStore()
   const { addOutputLayer } = useLayersStore()
   const rasterAssets = assets.filter(asset => asset.type === 'raster')
@@ -25,6 +25,8 @@ export default function RightPanel() {
   const [formError, setFormError] = React.useState<string>()
   const [modelSchema, setModelSchema] = React.useState<ModelSchema>()
   const [modelSchemaError, setModelSchemaError] = React.useState<string>()
+  const [importingSample, setImportingSample] = React.useState(false)
+  const [importSampleError, setImportSampleError] = React.useState<string>()
 
   React.useEffect(() => {
     if (!baselineRaster && rasterAssets[0]) setBaselineRaster(rasterAssets[0].id)
@@ -32,7 +34,7 @@ export default function RightPanel() {
   }, [baselineRaster, carbonPools, rasterAssets, tableAssets])
 
   React.useEffect(() => {
-    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
     let cancelled = false
     fetch(`${apiBaseUrl}/api/models/carbon/schema`)
       .then(response => {
@@ -51,6 +53,21 @@ export default function RightPanel() {
   }, [])
 
   const canRun = Boolean(baselineRaster && carbonPools && activeJobStatus !== 'running')
+
+  const handleImportSample = async () => {
+    setImportSampleError(undefined)
+    setImportingSample(true)
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sample-data/carbon/import`, { method: 'POST' })
+      if (!response.ok) throw new Error(`Sample import returned ${response.status}`)
+      await loadAssets()
+    } catch (error) {
+      setImportSampleError(error instanceof Error ? error.message : 'Unable to import sample data')
+    } finally {
+      setImportingSample(false)
+    }
+  }
 
   const handleRun = async () => {
     setFormError(undefined)
@@ -100,6 +117,18 @@ export default function RightPanel() {
               {modelSchema?.description ?? modelSchemaError ?? 'Backend model schema will appear when the API is available.'}
             </p>
           </div>
+
+          <Button variant="outline" className="mt-3 w-full" disabled={importingSample} onClick={() => void handleImportSample()}>
+            {importingSample ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Plus aria-hidden="true" />}
+            Import sample Carbon data
+          </Button>
+
+          {importSampleError && (
+            <div className="mt-3 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+              <span>{importSampleError}</span>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-col gap-3">
             <AssetSelect

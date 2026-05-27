@@ -58,3 +58,7 @@ backend/data/
 tmp/
 temp/
 *.tmp
+
+# Local sample data (keep README tracked)
+sample_data/carbon/*
+!sample_data/carbon/README.md

@@ -143,7 +143,7 @@ const fallbackMetadata: Record<string, AssetMetadata> = {
 }
 
 function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
 }
 
 function normalizeAsset(asset: Partial<Asset>): Asset {
@@ -359,11 +359,17 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
 
   const addLayer = React.useCallback((asset: Asset) => {
     if (asset.type !== 'raster' && asset.type !== 'geojson') return
+    const bounds = pickWgs84Bounds(asset) ?? fallbackMetadata[asset.id]?.bounds
+    if (bounds?.length === 4) {
+      setZoomRequest({
+        layerId: asset.id,
+        bounds,
+        nonce: Date.now(),
+      })
+    }
     setLayers(prev => {
       const layerId = `layer-${asset.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
       if (prev.some(layer => layer.id === layerId)) return prev
-
-      const bounds = pickWgs84Bounds(asset) ?? fallbackMetadata[asset.id]?.bounds
       const rasterUrl = asset.type === 'raster' && asset.source === 'backend'
         ? `${apiBaseUrl}/api/assets/${encodeURIComponent(asset.id)}/preview.png`
         : undefined

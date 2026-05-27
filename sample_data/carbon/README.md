@@ -1,8 +1,10 @@
-Place sample Carbon demo files here.
+Place local InVEST Carbon demo files here.
 
-Suggested structure:
-- lulc_bas.tif
-- carbon_pools.csv
-- lulc_alt.tif (optional for sequestration)
+Suggested structure (Willamette example):
+- lulc_current_willamette.tif
+- lulc_future_willamette.tif
+- carbon_pools_willamette.csv
 
-You can copy InVEST sample data into this folder for demo runs.
+Notes:
+- This folder is intended for local demo data and is ignored by git (except this README).
+- After files exist here, use the Workbench button "Import sample Carbon data".

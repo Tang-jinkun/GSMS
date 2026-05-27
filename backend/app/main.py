@@ -17,6 +17,8 @@ ASSET_PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR = Path(__file__).resolve().parents[1] / "data" / "projects" / "default" / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
+SAMPLE_CARBON_DIR = Path(__file__).resolve().parents[2] / "sample_data" / "carbon"
+
 app = FastAPI(title="InVEST WebGIS Workbench - Backend")
 
 app.add_middleware(
@@ -457,6 +459,42 @@ async def upload_asset(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return asset_summary(dest)
+
+
+@app.post("/api/sample-data/carbon/import")
+async def import_sample_carbon_data():
+    if not SAMPLE_CARBON_DIR.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="sample_data/carbon not found. See sample_data/carbon/README.md for setup.",
+        )
+
+    allowed_suffixes = {".tif", ".tiff", ".csv", ".geojson", ".json", ".zip"}
+    copied: list[dict] = []
+    for src in sorted(SAMPLE_CARBON_DIR.iterdir()):
+        if not src.is_file():
+            continue
+        if src.suffix.lower() not in allowed_suffixes:
+            continue
+
+        dest = ASSETS_DIR / src.name
+        if dest.exists():
+            original = Path(src.name)
+            dest = ASSETS_DIR / f"{original.stem}.{uuid.uuid4().hex}{original.suffix}"
+
+        try:
+            shutil.copy2(src, dest)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to import {src.name}: {exc}") from exc
+
+        copied.append(asset_summary(dest))
+
+    if not copied:
+        raise HTTPException(
+            status_code=404,
+            detail="No supported sample files found in sample_data/carbon. See sample_data/carbon/README.md for setup.",
+        )
+    return {"imported": copied}
 
 
 @app.delete("/api/assets/{asset_id}")
