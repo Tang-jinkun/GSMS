@@ -1,5 +1,5 @@
 import React from 'react'
-import { CheckCircle2, Clock3, Database, Download, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Clipboard, Clock3, Database, Download, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
 import { useAssetsStore, useJobsStore, useLayersStore, type RunMode } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
@@ -28,6 +28,7 @@ export default function RightPanel() {
   const [importingSample, setImportingSample] = React.useState(false)
   const [importSampleError, setImportSampleError] = React.useState<string>()
   const [runMode, setRunMode] = React.useState<RunMode>('auto')
+  const [logsCopied, setLogsCopied] = React.useState(false)
   const logsRef = React.useRef<HTMLPreElement | null>(null)
 
   React.useEffect(() => {
@@ -103,6 +104,16 @@ export default function RightPanel() {
       })
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to create job')
+    }
+  }
+
+  const handleCopyLogs = async () => {
+    try {
+      await navigator.clipboard.writeText(logs)
+      setLogsCopied(true)
+      window.setTimeout(() => setLogsCopied(false), 1400)
+    } catch {
+      setLogsCopied(false)
     }
   }
 
@@ -212,6 +223,17 @@ export default function RightPanel() {
               <span className="max-w-[210px] truncate font-mono text-xs text-slate-700">{activeJobId ?? 'none'}</span>
             </div>
           </div>
+          {activeJobStatus === 'succeeded' && (
+            <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
+              Carbon job completed. Outputs are available below; the primary raster is added to the map automatically when possible.
+            </div>
+          )}
+          {activeJobStatus === 'failed' && (
+            <div className="mt-3 flex gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700">
+              <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+              <span>Job failed. Check the log tail for the first ERROR entry and verify inputs or the InVEST environment.</span>
+            </div>
+          )}
         </section>
 
         <section className="border-b border-slate-200 p-4">
@@ -255,9 +277,22 @@ export default function RightPanel() {
         <section className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Logs</h3>
-            <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-500">polling</span>
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-500">polling</span>
+              <Button variant="outline" size="icon" aria-label="Copy logs" onClick={() => void handleCopyLogs()}>
+                <Clipboard aria-hidden="true" />
+              </Button>
+            </div>
           </div>
-          <pre ref={logsRef} className="h-72 overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100 shadow-inner">
+          {logsCopied && <div className="mb-2 text-xs text-slate-500">Logs copied.</div>}
+          <pre
+            ref={logsRef}
+            className={`h-72 overflow-auto rounded-md p-3 font-mono text-xs leading-5 shadow-inner ${
+              activeJobStatus === 'failed'
+                ? 'border border-red-400 bg-red-950 text-red-50'
+                : 'bg-slate-950 text-slate-100'
+            }`}
+          >
             {logs}
           </pre>
         </section>
