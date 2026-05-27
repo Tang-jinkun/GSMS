@@ -13,6 +13,15 @@ type ModelSchema = {
   outputs?: Array<{ name: string; type: string; map_default?: boolean }>
 }
 
+type CarbonSampleImportResponse = {
+  imported?: Array<{ id: string; name: string; sample_role?: string }>
+  roles?: {
+    baseline_lulc?: string
+    carbon_pools?: string
+    alternate_lulc?: string
+  }
+}
+
 export default function RightPanel() {
   const { assets, loadAssets } = useAssetsStore()
   const { activeJobId, activeJobStatus, logs, outputs, runCarbonJob } = useJobsStore()
@@ -77,7 +86,15 @@ export default function RightPanel() {
     try {
       const response = await fetch(`${apiBaseUrl}/api/sample-data/carbon/import`, { method: 'POST' })
       if (!response.ok) throw new Error(`Sample import returned ${response.status}`)
+      const data = (await response.json()) as CarbonSampleImportResponse
       await loadAssets()
+      const baselineId = data.roles?.baseline_lulc ?? data.imported?.find(asset => asset.sample_role === 'baseline_lulc')?.id
+      const poolsId = data.roles?.carbon_pools ?? data.imported?.find(asset => asset.sample_role === 'carbon_pools')?.id
+      if (baselineId) setBaselineRaster(baselineId)
+      if (poolsId) setCarbonPools(poolsId)
+      if (baselineId && poolsId) {
+        setResultsSuffix('sample_real')
+      }
     } catch (error) {
       setImportSampleError(error instanceof Error ? error.message : 'Unable to import sample data')
     } finally {

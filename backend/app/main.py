@@ -400,6 +400,17 @@ def output_summary(job_id: str, path: Path) -> dict:
     return summary
 
 
+def carbon_sample_role(filename: str) -> str | None:
+    lower_name = filename.lower()
+    if lower_name.endswith(".csv") and "carbon_pools" in lower_name:
+        return "carbon_pools"
+    if lower_name.endswith((".tif", ".tiff")) and "lulc_current" in lower_name:
+        return "baseline_lulc"
+    if lower_name.endswith((".tif", ".tiff")) and "lulc_future" in lower_name:
+        return "alternate_lulc"
+    return None
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -495,7 +506,8 @@ async def import_sample_carbon_data():
         )
 
     allowed_suffixes = {".tif", ".tiff", ".csv", ".geojson", ".json", ".zip"}
-    copied: list[dict] = []
+    imported: list[dict] = []
+    roles: dict[str, str] = {}
     for src in sorted(SAMPLE_CARBON_DIR.iterdir()):
         if not src.is_file():
             continue
@@ -503,23 +515,25 @@ async def import_sample_carbon_data():
             continue
 
         dest = ASSETS_DIR / src.name
-        if dest.exists():
-            original = Path(src.name)
-            dest = ASSETS_DIR / f"{original.stem}.{uuid.uuid4().hex}{original.suffix}"
+        if not dest.exists():
+            try:
+                shutil.copy2(src, dest)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to import {src.name}: {exc}") from exc
 
-        try:
-            shutil.copy2(src, dest)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to import {src.name}: {exc}") from exc
+        summary = asset_summary(dest)
+        sample_role = carbon_sample_role(src.name)
+        if sample_role:
+            summary["sample_role"] = sample_role
+            roles[sample_role] = summary["id"]
+        imported.append(summary)
 
-        copied.append(asset_summary(dest))
-
-    if not copied:
+    if not imported:
         raise HTTPException(
             status_code=404,
             detail="No supported sample files found in sample_data/carbon. See sample_data/carbon/README.md for setup.",
         )
-    return {"imported": copied}
+    return {"imported": imported, "roles": roles}
 
 
 @app.delete("/api/assets/{asset_id}")
