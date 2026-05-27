@@ -29,12 +29,19 @@ export default function RightPanel() {
   const [importSampleError, setImportSampleError] = React.useState<string>()
 
   React.useEffect(() => {
-    if (!baselineRaster && rasterAssets[0]) setBaselineRaster(rasterAssets[0].id)
-    if (!carbonPools && tableAssets[0]) setCarbonPools(tableAssets[0].id)
+    const rasterIds = new Set(rasterAssets.map(asset => asset.id))
+    const tableIds = new Set(tableAssets.map(asset => asset.id))
+
+    if ((!baselineRaster || !rasterIds.has(baselineRaster)) && rasterAssets[0]) {
+      setBaselineRaster(rasterAssets[0].id)
+    }
+    if ((!carbonPools || !tableIds.has(carbonPools)) && tableAssets[0]) {
+      setCarbonPools(tableAssets[0].id)
+    }
   }, [baselineRaster, carbonPools, rasterAssets, tableAssets])
 
   React.useEffect(() => {
-    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     let cancelled = false
     fetch(`${apiBaseUrl}/api/models/carbon/schema`)
       .then(response => {
@@ -57,7 +64,7 @@ export default function RightPanel() {
   const handleImportSample = async () => {
     setImportSampleError(undefined)
     setImportingSample(true)
-    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     try {
       const response = await fetch(`${apiBaseUrl}/api/sample-data/carbon/import`, { method: 'POST' })
       if (!response.ok) throw new Error(`Sample import returned ${response.status}`)
@@ -203,7 +210,7 @@ export default function RightPanel() {
                       variant="outline"
                       size="icon"
                       aria-label={`Add output ${output.name} to map`}
-                      disabled={output.type !== 'geojson' || !output.geojsonUrl}
+                      disabled={!((output.type === 'geojson' && output.geojsonUrl) || (output.type === 'raster' && output.previewUrl))}
                       onClick={() => addOutputLayer(output)}
                     >
                       <Plus aria-hidden="true" />

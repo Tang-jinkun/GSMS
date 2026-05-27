@@ -2,6 +2,7 @@ import argparse
 import json
 import time
 from pathlib import Path
+import shutil
 import sys
 
 parser = argparse.ArgumentParser()
@@ -22,6 +23,7 @@ if job_payload_path.exists():
 
 job_inputs = job_payload.get("inputs") if isinstance(job_payload.get("inputs"), dict) else {}
 results_suffix = str(job_inputs.get("results_suffix") or "mvp")
+baseline_asset_id = str(job_inputs.get("lulc_bas_asset_id") or "")
 
 with log_path.open("a", encoding="utf-8") as f:
     f.write("=== job runner started ===\n")
@@ -37,6 +39,17 @@ with log_path.open("a", encoding="utf-8") as f:
     out = job_dir / "outputs"
     out.mkdir(exist_ok=True)
     (out / "dummy_output.txt").write_text("This is a dummy model output for job %s" % args.job_id)
+
+    # Also emit a raster output when the baseline asset exists.
+    assets_dir = Path(__file__).resolve().parent / "data" / "projects" / "default" / "assets"
+    baseline_path = assets_dir / baseline_asset_id if baseline_asset_id else None
+    if baseline_path and baseline_path.exists() and baseline_path.is_file() and baseline_path.suffix.lower() in {".tif", ".tiff"}:
+        raster_name = f"carbon_output_{results_suffix}{baseline_path.suffix.lower()}"
+        try:
+            shutil.copy2(baseline_path, out / raster_name)
+            f.write(f"wrote raster output: {raster_name}\n")
+        except Exception as exc:
+            f.write(f"WARN: failed to write raster output from {baseline_asset_id}: {exc}\n")
     (out / "carbon_preview.geojson").write_text(json.dumps({
         "type": "FeatureCollection",
         "features": [

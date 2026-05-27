@@ -1,6 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pathlib import Path
 import csv
 import json
@@ -375,12 +375,19 @@ def output_summary(job_id: str, path: Path) -> dict:
         "size": path.stat().st_size,
         "download_url": f"/api/jobs/{job_id}/outputs/{path.name}/download",
     }
-    if path.suffix.lower() in {".geojson", ".json"}:
+    suffix = path.suffix.lower()
+    if suffix in {".tif", ".tiff"}:
+        summary["preview_url"] = f"/api/jobs/{job_id}/outputs/{path.name}/preview.png"
+    if suffix in {".geojson", ".json"}:
+        summary["geojson_url"] = f"/api/jobs/{job_id}/outputs/{path.name}/geojson"
+
+    if suffix in {".geojson", ".json", ".tif", ".tiff"}:
         try:
             metadata = read_asset_metadata(path)
-            summary["geojson_url"] = f"/api/jobs/{job_id}/outputs/{path.name}/geojson"
             if metadata.get("bounds"):
                 summary["bounds"] = metadata["bounds"]
+            if metadata.get("bounds_wgs84"):
+                summary["bounds_wgs84"] = metadata["bounds_wgs84"]
             if metadata.get("crs"):
                 summary["crs"] = metadata["crs"]
         except Exception:
@@ -588,3 +595,32 @@ async def download_job_output(job_id: str, filename: str):
 async def job_output_geojson(job_id: str, filename: str):
     output_path = get_job_output_path(job_id, filename)
     return read_geojson_asset(output_path)
+
+
+@app.api_route("/api/jobs/{job_id}/outputs/{filename}/preview.png", methods=["GET", "HEAD"])
+async def job_output_preview_png(job_id: str, filename: str, request: Request, max_size: int = 1024):
+    output_path = get_job_output_path(job_id, filename)
+    if output_path.suffix.lower() not in {".tif", ".tiff"}:
+        raise HTTPException(status_code=400, detail="Output is not a GeoTIFF")
+
+    previews_dir = (JOBS_DIR / job_id / "previews")
+    preview_path = previews_dir / f"{output_path.name}.png"
+    try:
+        if request.method == "HEAD":
+            headers = {"Content-Type": "image/png"}
+            if preview_path.exists():
+                try:
+                    headers["Content-Length"] = str(preview_path.stat().st_size)
+                except Exception:
+                    pass
+            return Response(status_code=200, headers=headers)
+
+        if preview_path.exists() and preview_path.stat().st_mtime >= output_path.stat().st_mtime:
+            return FileResponse(str(preview_path), media_type="image/png")
+
+        _generate_raster_preview_png(output_path, preview_path, max_size=max_size)
+        return FileResponse(str(preview_path), media_type="image/png")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate output preview: {exc}")

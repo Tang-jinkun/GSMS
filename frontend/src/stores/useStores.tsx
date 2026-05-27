@@ -62,7 +62,9 @@ export type JobOutput = {
   size?: number
   downloadUrl: string
   geojsonUrl?: string
+  previewUrl?: string
   bounds?: number[] | null
+  boundsWgs84?: number[] | null
   crs?: string | null
 }
 
@@ -143,7 +145,7 @@ const fallbackMetadata: Record<string, AssetMetadata> = {
 }
 
 function getApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8001'
+  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 }
 
 function normalizeAsset(asset: Partial<Asset>): Asset {
@@ -189,7 +191,9 @@ function normalizeOutput(
     size?: number
     download_url?: string
     geojson_url?: string
+    preview_url?: string
     bounds?: number[] | null
+    bounds_wgs84?: number[] | null
     crs?: string | null
   },
   apiBaseUrl: string,
@@ -197,6 +201,7 @@ function normalizeOutput(
   const name = String(output.name ?? output.id)
   const downloadPath = output.download_url ?? ''
   const geojsonPath = output.geojson_url
+  const previewPath = output.preview_url
   return {
     id: String(output.id ?? name),
     jobId: output.job_id,
@@ -205,7 +210,9 @@ function normalizeOutput(
     size: output.size,
     downloadUrl: downloadPath.startsWith('http') ? downloadPath : `${apiBaseUrl}${downloadPath}`,
     geojsonUrl: geojsonPath ? (geojsonPath.startsWith('http') ? geojsonPath : `${apiBaseUrl}${geojsonPath}`) : undefined,
+    previewUrl: previewPath ? (previewPath.startsWith('http') ? previewPath : `${apiBaseUrl}${previewPath}`) : undefined,
     bounds: output.bounds,
+    boundsWgs84: output.bounds_wgs84,
     crs: output.crs,
   }
 }
@@ -394,29 +401,45 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
   }, [apiBaseUrl])
 
   const addOutputLayer = React.useCallback((output: JobOutput) => {
-    if (output.type !== 'geojson' || !output.geojsonUrl) return
+    const bounds = output.boundsWgs84 ?? output.bounds
+    const canAddGeoJson = output.type === 'geojson' && Boolean(output.geojsonUrl)
+    const canAddRaster = output.type === 'raster' && Boolean(output.previewUrl)
+    if (!canAddGeoJson && !canAddRaster) return
+
     setLayers(prev => {
       const layerKey = `${output.jobId ?? 'job'}-${output.id}-${output.name}`
       const layerId = `output-${layerKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
       if (prev.some(layer => layer.id === layerId)) return prev
-      return [
-        {
-          id: layerId,
-          name: output.name,
-          assetId: layerKey,
-          type: 'geojson',
-          visible: true,
-          opacity: 0.82,
-          bounds: output.bounds,
-          geojsonUrl: output.geojsonUrl,
-        },
-        ...prev,
-      ]
+
+      const layer: Layer = canAddRaster
+        ? {
+            id: layerId,
+            name: output.name,
+            assetId: layerKey,
+            type: 'raster',
+            visible: true,
+            opacity: 0.64,
+            bounds,
+            rasterUrl: output.previewUrl,
+          }
+        : {
+            id: layerId,
+            name: output.name,
+            assetId: layerKey,
+            type: 'geojson',
+            visible: true,
+            opacity: 0.82,
+            bounds,
+            geojsonUrl: output.geojsonUrl,
+          }
+
+      return [layer, ...prev]
     })
-    if (output.bounds?.length === 4) {
+
+    if (bounds?.length === 4) {
       setZoomRequest({
         layerId: output.id,
-        bounds: output.bounds,
+        bounds,
         nonce: Date.now(),
       })
     }
