@@ -430,7 +430,43 @@ npx tsc --noEmit
 npm run build
 ```
 
-如果 `.next/trace` 被 dev server 锁住，先停止对应端口的 Next 进程，再删除 `.next` 后构建。
+#### Next.js on Windows 构建 / dev server 卡住处理
+
+本项目多次遇到 Next.js 在 Windows 上卡在 `Creating an optimized production build ...`、`next-router-worker` 或启动后端口无响应的情况。根据当前追溯，`.next` 缓存和 `.next/trace` 锁文件是高频诱因，但不是唯一原因；即使执行过清理，Next 13.5.6 在 Windows 上仍可能停在 worker 启动阶段。
+
+处理顺序必须固定：
+
+1. 先确认并停止已有 Next / npm / node 进程，尤其是占用 `3000-3010` 端口的进程。
+2. 再运行：
+
+```powershell
+cd frontend
+npm run clean
+```
+
+该脚本会清理：
+
+```text
+.next/
+.next-build/
+node_modules/.cache/
+.turbo/
+```
+
+3. 清理后再运行：
+
+```powershell
+npx tsc --noEmit
+npm run dev -- --port <free-port>
+```
+
+4. 如果 `npm run build` 或 `next dev` 仍长时间无输出，不要让构建进程留在后台；应停止相关进程，记录为 Windows Next dev/build hang，并用 `npx tsc --noEmit`、后端 API smoke test、浏览器可访问性检查作为本轮替代验证。
+
+注意事项：
+
+- 不要随意重新引入 `distDir: ".next-build"` 或在 `next.config.js` 中关闭 webpack cache。历史提交 `8755a37` 曾尝试用该方式稳定 Windows 构建，后续提交 `82d90ba` 已将其移除，因为它本身也可能引入 dev hang。
+- `.next/`、`.next-build/`、`node_modules/.cache/` 和 `.turbo/` 永远不应提交到 Git。
+- 如果 `.next/trace` 被锁，必须先杀掉持有该目录的 Next 进程，再清理缓存；不要直接反复启动新的 dev server。
 
 ### 7.3 浏览器验证
 
