@@ -371,6 +371,48 @@ def get_job_output_path(job_id: str, filename: str) -> Path:
     return output_path
 
 
+def get_job_status_from_log(job_dir: Path) -> str:
+    job_log = job_dir / "run.log"
+    if not job_log.exists():
+        return "missing"
+    log_text = job_log.read_text(encoding="utf-8", errors="replace")
+    if "=== job runner finished ===" in log_text:
+        return "succeeded"
+    if "ERROR" in log_text or "failed" in log_text.lower():
+        return "failed"
+    return "running"
+
+
+def job_summary(job_dir: Path) -> dict:
+    job_json = job_dir / "job.json"
+    payload = {}
+    if job_json.exists():
+        try:
+            payload = json.loads(job_json.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    outputs_dir = job_dir / "outputs"
+    outputs_count = len([path for path in outputs_dir.iterdir() if path.is_file()]) if outputs_dir.exists() else 0
+    completed_at = None
+    if outputs_dir.exists():
+        output_files = [path for path in outputs_dir.iterdir() if path.is_file()]
+        if output_files:
+            completed_at = max(path.stat().st_mtime for path in output_files)
+
+    return {
+        "job_id": job_dir.name,
+        "status": get_job_status_from_log(job_dir),
+        "model_id": payload.get("modelId") or payload.get("model_id") or "carbon",
+        "run_mode": payload.get("run_mode") or "auto",
+        "results_suffix": inputs.get("results_suffix"),
+        "outputs_count": outputs_count,
+        "created_at": job_json.stat().st_mtime if job_json.exists() else job_dir.stat().st_mtime,
+        "completed_at": completed_at,
+    }
+
+
 def output_summary(job_id: str, path: Path) -> dict:
     summary = {
         "id": f"{job_id}:{path.name}",
@@ -566,21 +608,23 @@ async def create_job(payload: dict):
     return {"job_id": job_id, "status": "running", "job_dir": str(job_dir)}
 
 
+@app.get("/api/jobs")
+async def list_jobs(limit: int = 20):
+    jobs = []
+    for job_dir in JOBS_DIR.iterdir():
+        if job_dir.is_dir() and (job_dir / "run.log").exists():
+            jobs.append(job_summary(job_dir))
+    jobs.sort(key=lambda item: item["created_at"], reverse=True)
+    return jobs[: max(1, min(limit, 100))]
+
+
 @app.get("/api/jobs/{job_id}")
 async def job_status(job_id: str):
     job_dir = JOBS_DIR / job_id
     job_log = job_dir / "run.log"
     if not job_log.exists():
         raise HTTPException(status_code=404, detail="Job not found")
-
-    log_text = job_log.read_text(encoding="utf-8", errors="replace")
-    if "=== job runner finished ===" in log_text:
-        status = "succeeded"
-    elif "ERROR" in log_text or "failed" in log_text.lower():
-        status = "failed"
-    else:
-        status = "running"
-    return {"job_id": job_id, "status": status}
+    return {"job_id": job_id, "status": get_job_status_from_log(job_dir)}
 
 
 @app.get("/api/jobs/{job_id}/logs")

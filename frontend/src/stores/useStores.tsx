@@ -54,6 +54,17 @@ export type ZoomRequest = {
 
 export type JobStatus = 'idle' | 'running' | 'succeeded' | 'failed'
 
+export type JobSummary = {
+  jobId: string
+  status: JobStatus
+  modelId: string
+  runMode: RunMode
+  resultsSuffix?: string
+  outputsCount: number
+  createdAt?: number
+  completedAt?: number | null
+}
+
 export type JobOutput = {
   id: string
   jobId?: string
@@ -89,6 +100,7 @@ type Stores = {
   activeJobStatus: JobStatus
   logs: string
   outputs: JobOutput[]
+  jobHistory: JobSummary[]
   loadAssets: () => Promise<void>
   uploadAsset: (file: File) => Promise<void>
   loadAssetMetadata: (assetId: string) => Promise<void>
@@ -100,6 +112,8 @@ type Stores = {
   removeLayer: (layerId: string) => void
   zoomToLayer: (layerId: string) => void
   runCarbonJob: (request: CarbonJobRequest) => Promise<void>
+  loadJobHistory: () => Promise<void>
+  selectJob: (jobId: string) => Promise<void>
   loadJobOutputs: (jobId: string) => Promise<void>
 }
 
@@ -224,6 +238,28 @@ function normalizeOutput(
   }
 }
 
+function normalizeJobSummary(job: {
+  job_id?: string
+  status?: JobStatus
+  model_id?: string
+  run_mode?: RunMode
+  results_suffix?: string
+  outputs_count?: number
+  created_at?: number
+  completed_at?: number | null
+}): JobSummary {
+  return {
+    jobId: String(job.job_id),
+    status: job.status ?? 'idle',
+    modelId: job.model_id ?? 'carbon',
+    runMode: job.run_mode ?? 'auto',
+    resultsSuffix: job.results_suffix,
+    outputsCount: job.outputs_count ?? 0,
+    createdAt: job.created_at,
+    completedAt: job.completed_at,
+  }
+}
+
 function inferAssetType(filename: string): AssetType {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.tif') || lower.endsWith('.tiff')) return 'raster'
@@ -247,6 +283,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
   const [activeJobStatus, setActiveJobStatus] = React.useState<JobStatus>('idle')
   const [logs, setLogs] = React.useState('No job has been started.')
   const [outputs, setOutputs] = React.useState<JobOutput[]>([])
+  const [jobHistory, setJobHistory] = React.useState<JobSummary[]>([])
 
   const loadAssets = React.useCallback(async () => {
     setAssetsStatus('loading')
@@ -487,6 +524,13 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     setActiveJobId(data.job_id)
   }, [apiBaseUrl])
 
+  const loadJobHistory = React.useCallback(async () => {
+    const response = await fetch(`${apiBaseUrl}/api/jobs`)
+    if (!response.ok) throw new Error(`Jobs API returned ${response.status}`)
+    const data = await response.json()
+    setJobHistory(Array.isArray(data) ? data.map(normalizeJobSummary) : [])
+  }, [apiBaseUrl])
+
   const loadJobOutputs = React.useCallback(async (jobId: string) => {
     const response = await fetch(`${apiBaseUrl}/api/jobs/${jobId}/outputs`)
     if (!response.ok) throw new Error(`Outputs API returned ${response.status}`)
@@ -501,6 +545,26 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
       addOutputLayer(primaryRaster)
     }
   }, [addOutputLayer, apiBaseUrl])
+
+  const selectJob = React.useCallback(async (jobId: string) => {
+    setActiveJobId(jobId)
+    setOutputs([])
+    const [statusResponse, logsResponse] = await Promise.all([
+      fetch(`${apiBaseUrl}/api/jobs/${jobId}`),
+      fetch(`${apiBaseUrl}/api/jobs/${jobId}/logs`),
+    ])
+    if (!statusResponse.ok) throw new Error(`Job API returned ${statusResponse.status}`)
+    const statusData = await statusResponse.json()
+    setActiveJobStatus(statusData.status ?? 'idle')
+    if (logsResponse.ok) {
+      setLogs(await logsResponse.text())
+    }
+    await loadJobOutputs(jobId)
+  }, [apiBaseUrl, loadJobOutputs])
+
+  React.useEffect(() => {
+    void loadJobHistory()
+  }, [loadJobHistory])
 
   React.useEffect(() => {
     if (!activeJobId || activeJobStatus !== 'running') return
@@ -524,6 +588,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
             if (statusData.status === 'succeeded') {
               void loadJobOutputs(activeJobId)
             }
+            void loadJobHistory()
             window.clearInterval(timer)
           }
         }
@@ -554,6 +619,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     activeJobStatus,
     logs,
     outputs,
+    jobHistory,
     loadAssets,
     uploadAsset,
     loadAssetMetadata,
@@ -565,6 +631,8 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     removeLayer,
     zoomToLayer,
     runCarbonJob,
+    loadJobHistory,
+    selectJob,
     loadJobOutputs,
   }
 
@@ -614,7 +682,10 @@ export function useJobsStore() {
     activeJobStatus: ctx.activeJobStatus,
     logs: ctx.logs,
     outputs: ctx.outputs,
+    jobHistory: ctx.jobHistory,
     runCarbonJob: ctx.runCarbonJob,
+    loadJobHistory: ctx.loadJobHistory,
+    selectJob: ctx.selectJob,
     loadJobOutputs: ctx.loadJobOutputs,
   }
 }

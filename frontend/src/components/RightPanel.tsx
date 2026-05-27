@@ -24,12 +24,14 @@ type CarbonSampleImportResponse = {
 
 export default function RightPanel() {
   const { assets, loadAssets } = useAssetsStore()
-  const { activeJobId, activeJobStatus, logs, outputs, runCarbonJob } = useJobsStore()
+  const { activeJobId, activeJobStatus, logs, outputs, jobHistory, runCarbonJob, selectJob } = useJobsStore()
   const { addOutputLayer } = useLayersStore()
   const rasterAssets = assets.filter(asset => asset.type === 'raster')
   const tableAssets = assets.filter(asset => asset.type === 'table')
   const [baselineRaster, setBaselineRaster] = React.useState('')
+  const [alternateRaster, setAlternateRaster] = React.useState('')
   const [carbonPools, setCarbonPools] = React.useState('')
+  const [calcSequestration, setCalcSequestration] = React.useState(false)
   const [resultsSuffix, setResultsSuffix] = React.useState('mvp')
   const [formError, setFormError] = React.useState<string>()
   const [modelSchema, setModelSchema] = React.useState<ModelSchema>()
@@ -47,10 +49,14 @@ export default function RightPanel() {
     if ((!baselineRaster || !rasterIds.has(baselineRaster)) && rasterAssets[0]) {
       setBaselineRaster(rasterAssets[0].id)
     }
+    if (calcSequestration && (!alternateRaster || !rasterIds.has(alternateRaster) || alternateRaster === baselineRaster)) {
+      const fallbackAlt = rasterAssets.find(asset => asset.id !== baselineRaster)
+      setAlternateRaster(fallbackAlt?.id ?? '')
+    }
     if ((!carbonPools || !tableIds.has(carbonPools)) && tableAssets[0]) {
       setCarbonPools(tableAssets[0].id)
     }
-  }, [baselineRaster, carbonPools, rasterAssets, tableAssets])
+  }, [alternateRaster, baselineRaster, calcSequestration, carbonPools, rasterAssets, tableAssets])
 
   React.useEffect(() => {
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
@@ -90,8 +96,10 @@ export default function RightPanel() {
       await loadAssets()
       const baselineId = data.roles?.baseline_lulc ?? data.imported?.find(asset => asset.sample_role === 'baseline_lulc')?.id
       const poolsId = data.roles?.carbon_pools ?? data.imported?.find(asset => asset.sample_role === 'carbon_pools')?.id
+      const alternateId = data.roles?.alternate_lulc ?? data.imported?.find(asset => asset.sample_role === 'alternate_lulc')?.id
       if (baselineId) setBaselineRaster(baselineId)
       if (poolsId) setCarbonPools(poolsId)
+      if (alternateId) setAlternateRaster(alternateId)
       if (baselineId && poolsId) {
         setResultsSuffix('sample_real')
       }
@@ -108,13 +116,18 @@ export default function RightPanel() {
       setFormError('Baseline LULC raster and carbon pools CSV are required.')
       return
     }
+    if (calcSequestration && (!alternateRaster || alternateRaster === baselineRaster)) {
+      setFormError('A distinct alternate LULC raster is required when sequestration is enabled.')
+      return
+    }
     try {
       await runCarbonJob({
         runMode,
         inputs: {
           lulc_bas_asset_id: baselineRaster,
           carbon_pools_asset_id: carbonPools,
-          calc_sequestration: false,
+          calc_sequestration: calcSequestration,
+          lulc_alt_asset_id: calcSequestration ? alternateRaster : undefined,
           results_suffix: resultsSuffix.trim() || 'mvp',
           n_workers: -1,
         },
@@ -193,6 +206,25 @@ export default function RightPanel() {
               emptyLabel="No CSV assets"
               onChange={setCarbonPools}
             />
+            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
+              <span>Calculate sequestration</span>
+              <input
+                className="size-4 accent-slate-900"
+                type="checkbox"
+                checked={calcSequestration}
+                onChange={event => setCalcSequestration(event.target.checked)}
+              />
+            </label>
+            {calcSequestration && (
+              <AssetSelect
+                label="Alternate LULC raster"
+                icon={<Database aria-hidden="true" className="size-4" />}
+                value={alternateRaster}
+                assets={rasterAssets.filter(asset => asset.id !== baselineRaster)}
+                emptyLabel="No alternate raster assets"
+                onChange={setAlternateRaster}
+              />
+            )}
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Results suffix
               <Input value={resultsSuffix} onChange={event => setResultsSuffix(event.target.value)} />
@@ -251,6 +283,43 @@ export default function RightPanel() {
               <span>Job failed. Check the log tail for the first ERROR entry and verify inputs or the InVEST environment.</span>
             </div>
           )}
+        </section>
+
+        <section className="border-b border-slate-200 p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Recent jobs</h3>
+            <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-500">{jobHistory.length}</span>
+          </div>
+          <div className="mt-3 flex max-h-48 flex-col gap-2 overflow-auto">
+            {jobHistory.length === 0 ? (
+              <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
+                No job history yet.
+              </div>
+            ) : (
+              jobHistory.map(job => (
+                <button
+                  key={job.jobId}
+                  className={`rounded-md border p-3 text-left transition ${
+                    activeJobId === job.jobId
+                      ? 'border-slate-900 bg-slate-100'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                  }`}
+                  onClick={() => void selectJob(job.jobId)}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-mono text-xs text-slate-700">{job.jobId}</span>
+                    <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] capitalize text-slate-600">
+                      {job.status}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 text-xs text-slate-500">
+                    <span>{job.runMode} / {job.resultsSuffix ?? 'no suffix'}</span>
+                    <span>{job.outputsCount} outputs</span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
         </section>
 
         <section className="border-b border-slate-200 p-4">
