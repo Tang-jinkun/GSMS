@@ -41,8 +41,8 @@ MODEL_REGISTRY = [
     {
         "id": "carbon",
         "name": "Carbon Storage and Sequestration",
-        "description": "Estimate carbon storage from a baseline LULC raster and carbon pools table.",
-        "status": "stub",
+        "description": "Estimate carbon storage from a baseline LULC raster and carbon pools table. The runner uses natcap.invest when installed and falls back to explicit development stub outputs in auto mode.",
+        "status": "auto",
         "inputs": [
             {
                 "id": "lulc_bas_asset_id",
@@ -65,6 +65,11 @@ MODEL_REGISTRY = [
             },
         ],
         "outputs": [
+            {
+                "name": "carbon_output_{results_suffix}.tif",
+                "type": "raster",
+                "map_default": True,
+            },
             {
                 "name": "carbon_preview.geojson",
                 "type": "geojson",
