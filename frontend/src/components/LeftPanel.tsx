@@ -1,5 +1,6 @@
 import React from 'react'
 import {
+  Download,
   Eye,
   EyeOff,
   FileText,
@@ -12,7 +13,15 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
-import { useAssetsStore, useLayersStore, type Asset, type AssetMetadata, type AssetType } from '../stores/useStores'
+import {
+  useAssetsStore,
+  useJobsStore,
+  useLayersStore,
+  type Asset,
+  type AssetMetadata,
+  type AssetType,
+  type JobOutput,
+} from '../stores/useStores'
 import { Button } from './ui'
 
 function formatBytes(size?: number) {
@@ -50,7 +59,8 @@ export default function LeftPanel() {
     loadAssetMetadata,
     deleteAsset,
   } = useAssetsStore()
-  const { layers, addLayer, updateLayer, removeLayer, zoomToLayer } = useLayersStore()
+  const { outputs, activeJobId } = useJobsStore()
+  const { layers, addLayer, addOutputLayer, updateLayer, removeLayer, zoomToLayer } = useLayersStore()
 
   const canMap = (asset: Asset) => asset.type === 'raster' || asset.type === 'geojson'
 
@@ -142,54 +152,50 @@ export default function LeftPanel() {
           )}
 
           <div className="min-h-0 flex-1 overflow-auto p-2">
-            <div className="flex flex-col gap-2">
-              {assets.map(asset => (
-                <div key={asset.id} className="rounded-md border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-900">{asset.name}</div>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">{typeLabel(asset.type)}</span>
-                        <span>{formatBytes(asset.size)}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`View metadata for ${asset.name}`}
-                        onClick={() => toggleMetadata(asset)}
-                      >
-                        <Info aria-hidden="true" />
-                      </Button>
-                      <Button
-                        variant={canMap(asset) ? 'secondary' : 'ghost'}
-                        size="icon"
-                        aria-label={`Add ${asset.name} to map`}
-                        disabled={!canMap(asset)}
-                        onClick={() => addLayer(asset)}
-                      >
-                        <Plus aria-hidden="true" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Delete ${asset.name}`}
-                        onClick={() => void handleDeleteAsset(asset)}
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </Button>
-                    </div>
-                  </div>
-                  {expandedAssetId === asset.id && (
-                    <MetadataDetails
+            <div className="flex flex-col gap-4">
+              <FileGroup
+                title="Project inputs"
+                count={assets.length}
+                description="Uploaded or imported assets available for model inputs."
+              >
+                {assets.length === 0 ? (
+                  <EmptyFileGroup label="No project input assets" />
+                ) : (
+                  assets.map(asset => (
+                    <AssetCard
+                      key={asset.id}
+                      asset={asset}
+                      expanded={expandedAssetId === asset.id}
                       metadata={assetMetadata[asset.id]}
-                      status={metadataStatus[asset.id]}
-                      error={metadataError[asset.id]}
+                      metadataStatus={metadataStatus[asset.id]}
+                      metadataError={metadataError[asset.id]}
+                      canMap={canMap(asset)}
+                      onToggleMetadata={() => toggleMetadata(asset)}
+                      onAddToMap={() => addLayer(asset)}
+                      onDelete={() => void handleDeleteAsset(asset)}
                     />
-                  )}
-                </div>
-              ))}
+                  ))
+                )}
+              </FileGroup>
+
+              <FileGroup
+                title="Selected job outputs"
+                count={outputs.length}
+                description={activeJobId ? `Outputs from ${activeJobId}` : 'Select or run a job to inspect outputs.'}
+              >
+                {outputs.length === 0 ? (
+                  <EmptyFileGroup label="No selected job outputs" />
+                ) : (
+                  outputs.map(output => (
+                    <OutputCard
+                      key={output.id}
+                      output={output}
+                      onAddToMap={() => addOutputLayer(output)}
+                      onDownload={() => window.open(output.downloadUrl, '_blank')}
+                    />
+                  ))
+                )}
+              </FileGroup>
             </div>
           </div>
         </div>
@@ -258,6 +264,135 @@ export default function LeftPanel() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function FileGroup({
+  title,
+  count,
+  description,
+  children,
+}: {
+  title: string
+  count: number
+  description: string
+  children: React.ReactNode
+}) {
+  return (
+    <section>
+      <div className="mb-2 flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
+          <p className="mt-0.5 truncate text-[11px] text-slate-500" title={description}>
+            {description}
+          </p>
+        </div>
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{count}</span>
+      </div>
+      <div className="flex flex-col gap-2">{children}</div>
+    </section>
+  )
+}
+
+function EmptyFileGroup({ label }: { label: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
+      {label}
+    </div>
+  )
+}
+
+function AssetCard({
+  asset,
+  expanded,
+  metadata,
+  metadataStatus,
+  metadataError,
+  canMap,
+  onToggleMetadata,
+  onAddToMap,
+  onDelete,
+}: {
+  asset: Asset
+  expanded: boolean
+  metadata?: AssetMetadata
+  metadataStatus?: 'loading' | 'ready' | 'error'
+  metadataError?: string
+  canMap: boolean
+  onToggleMetadata: () => void
+  onAddToMap: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-slate-900">{asset.name}</div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">{typeLabel(asset.type)}</span>
+            <span>{formatBytes(asset.size)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" aria-label={`View metadata for ${asset.name}`} onClick={onToggleMetadata}>
+            <Info aria-hidden="true" />
+          </Button>
+          <Button
+            variant={canMap ? 'secondary' : 'ghost'}
+            size="icon"
+            aria-label={`Add ${asset.name} to map`}
+            disabled={!canMap}
+            onClick={onAddToMap}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+          <Button variant="ghost" size="icon" aria-label={`Delete ${asset.name}`} onClick={onDelete}>
+            <Trash2 aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      {expanded && <MetadataDetails metadata={metadata} status={metadataStatus} error={metadataError} />}
+    </div>
+  )
+}
+
+function OutputCard({
+  output,
+  onAddToMap,
+  onDownload,
+}: {
+  output: JobOutput
+  onAddToMap: () => void
+  onDownload: () => void
+}) {
+  const canMapOutput = Boolean((output.type === 'geojson' && output.geojsonUrl) || (output.type === 'raster' && output.previewUrl))
+
+  return (
+    <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-slate-900">{output.name}</div>
+          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+            <span className="rounded bg-white px-1.5 py-0.5 font-medium text-emerald-700">{typeLabel(output.type)}</span>
+            <span>{formatBytes(output.size)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant={canMapOutput ? 'secondary' : 'ghost'}
+            size="icon"
+            aria-label={`Add output ${output.name} to map`}
+            disabled={!canMapOutput}
+            onClick={onAddToMap}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+          <Button variant="ghost" size="icon" aria-label={`Download ${output.name}`} onClick={onDownload}>
+            <Download aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
