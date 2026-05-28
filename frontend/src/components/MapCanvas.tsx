@@ -42,19 +42,14 @@ export default function MapCanvas() {
       container: containerRef.current,
       style: {
         version: 8,
-        sources: {
-          osm: {
-            type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256,
-            attribution: 'OpenStreetMap contributors',
-          },
-        },
+        sources: {},
         layers: [
           {
-            id: 'osm',
-            type: 'raster',
-            source: 'osm',
+            id: 'workspace-background',
+            type: 'background',
+            paint: {
+              'background-color': '#dbe4ee',
+            },
           },
         ],
       },
