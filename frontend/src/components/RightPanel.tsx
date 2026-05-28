@@ -1,5 +1,5 @@
 import React from 'react'
-import { CheckCircle2, Clipboard, Clock3, Database, Download, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Clipboard, Clock3, Database, Download, FileSearch, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
 import { useAssetsStore, useJobsStore, useLayersStore, type RunMode } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
@@ -22,6 +22,14 @@ type CarbonSampleImportResponse = {
   }
 }
 
+type CarbonCheckResult = {
+  status: 'ok' | 'warning' | 'error'
+  errors: string[]
+  warnings: string[]
+  info: string[]
+  details?: Record<string, unknown>
+}
+
 export default function RightPanel() {
   const { assets, loadAssets } = useAssetsStore()
   const { activeJobId, activeJobStatus, logs, outputs, jobHistory, runCarbonJob, selectJob } = useJobsStore()
@@ -40,6 +48,8 @@ export default function RightPanel() {
   const [importSampleError, setImportSampleError] = React.useState<string>()
   const [runMode, setRunMode] = React.useState<RunMode>('auto')
   const [logsCopied, setLogsCopied] = React.useState(false)
+  const [checkingInputs, setCheckingInputs] = React.useState(false)
+  const [checkResult, setCheckResult] = React.useState<CarbonCheckResult>()
   const logsRef = React.useRef<HTMLPreElement | null>(null)
 
   React.useEffect(() => {
@@ -110,6 +120,35 @@ export default function RightPanel() {
     }
   }
 
+  const buildCarbonInputs = () => ({
+    lulc_bas_asset_id: baselineRaster,
+    carbon_pools_asset_id: carbonPools,
+    calc_sequestration: calcSequestration,
+    lulc_alt_asset_id: calcSequestration ? alternateRaster : undefined,
+    results_suffix: resultsSuffix.trim() || 'mvp',
+    n_workers: -1,
+  })
+
+  const handleCheckInputs = async () => {
+    setFormError(undefined)
+    setCheckResult(undefined)
+    setCheckingInputs(true)
+    const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/models/carbon/check-inputs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputs: buildCarbonInputs() }),
+      })
+      if (!response.ok) throw new Error(`Input check returned ${response.status}`)
+      setCheckResult((await response.json()) as CarbonCheckResult)
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to check inputs')
+    } finally {
+      setCheckingInputs(false)
+    }
+  }
+
   const handleRun = async () => {
     setFormError(undefined)
     if (!baselineRaster || !carbonPools) {
@@ -123,14 +162,7 @@ export default function RightPanel() {
     try {
       await runCarbonJob({
         runMode,
-        inputs: {
-          lulc_bas_asset_id: baselineRaster,
-          carbon_pools_asset_id: carbonPools,
-          calc_sequestration: calcSequestration,
-          lulc_alt_asset_id: calcSequestration ? alternateRaster : undefined,
-          results_suffix: resultsSuffix.trim() || 'mvp',
-          n_workers: -1,
-        },
+        inputs: buildCarbonInputs(),
       })
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to create job')
@@ -254,10 +286,18 @@ export default function RightPanel() {
             </div>
           )}
 
-          <Button className="mt-4 w-full" disabled={!canRun} onClick={() => void handleRun()}>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Button variant="outline" disabled={!canRun || checkingInputs} onClick={() => void handleCheckInputs()}>
+              {checkingInputs ? <Loader2 aria-hidden="true" className="animate-spin" /> : <FileSearch aria-hidden="true" />}
+              Check inputs
+            </Button>
+            <Button disabled={!canRun} onClick={() => void handleRun()}>
             {activeJobStatus === 'running' ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}
             {activeJobStatus === 'running' ? 'Running' : 'Run Carbon'}
-          </Button>
+            </Button>
+          </div>
+
+          {checkResult && <InputCheckPanel result={checkResult} />}
         </section>
 
         <section className="border-b border-slate-200 p-4">
@@ -437,6 +477,42 @@ function AssetSelect({
         )}
       </select>
     </label>
+  )
+}
+
+function InputCheckPanel({ result }: { result: CarbonCheckResult }) {
+  const hasErrors = result.errors.length > 0
+  const hasWarnings = result.warnings.length > 0
+  const styles = hasErrors
+    ? 'border-red-200 bg-red-50 text-red-700'
+    : hasWarnings
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+
+  return (
+    <div className={`mt-4 rounded-md border px-3 py-3 text-xs leading-5 ${styles}`}>
+      <div className="flex items-center gap-2 font-semibold">
+        {hasErrors ? <TriangleAlert aria-hidden="true" className="size-4" /> : <CheckCircle2 aria-hidden="true" className="size-4" />}
+        Input check: {result.status}
+      </div>
+      <CheckList title="Errors" items={result.errors} />
+      <CheckList title="Warnings" items={result.warnings} />
+      <CheckList title="Info" items={result.info} />
+    </div>
+  )
+}
+
+function CheckList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="mt-2">
+      <div className="font-medium">{title}</div>
+      <ul className="mt-1 list-disc space-y-1 pl-4">
+        {items.map(item => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

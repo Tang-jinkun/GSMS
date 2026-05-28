@@ -106,6 +106,7 @@ c_storage_bas_*.tif
 - raster PNG preview。
 - GeoJSON layer rendering。
 - Carbon `auto` / `real` runner。
+- Carbon input check。
 - job logs/status/outputs。
 - recent job restore。
 - sample Carbon auto-binding。

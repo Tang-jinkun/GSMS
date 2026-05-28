@@ -33,6 +33,7 @@ GET  /api/assets/{asset_id}/preview.png
 POST /api/sample-data/carbon/import
 GET  /api/models
 GET  /api/models/{model_id}/schema
+POST /api/models/carbon/check-inputs
 POST /api/jobs
 GET  /api/jobs
 GET  /api/jobs/{job_id}
