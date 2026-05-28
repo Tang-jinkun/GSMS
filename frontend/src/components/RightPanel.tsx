@@ -1,6 +1,6 @@
 import React from 'react'
 import { CheckCircle2, Clipboard, Clock3, Database, Download, FileSearch, FileText, Layers3, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
-import { useAssetsStore, useJobsStore, useLayersStore, type RunMode } from '../stores/useStores'
+import { useAssetsStore, useJobsStore, useLayersStore, type Asset, type AssetType, type RunMode } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
 
@@ -26,8 +26,12 @@ type ModelInputSpec = {
   required_if?: string
   allowed_if?: string
   default?: string | number | boolean
+  placeholder?: string | number
   hidden?: boolean
 }
+
+type ModelInputValue = string | boolean | number | undefined
+type ModelInputValues = Record<string, ModelInputValue>
 
 type CarbonSampleImportResponse = {
   imported?: Array<{ id: string; name: string; sample_role?: string }>
@@ -48,23 +52,16 @@ type CarbonCheckResult = {
 
 export default function RightPanel() {
   const { assets, loadAssets } = useAssetsStore()
-  const { activeJobId, activeJobStatus, logs, outputs, jobHistory, runCarbonJob, selectJob } = useJobsStore()
+  const { activeJobId, activeJobStatus, logs, outputs, jobHistory, runModelJob, selectJob } = useJobsStore()
   const { addOutputLayer } = useLayersStore()
-  const rasterAssets = assets.filter(asset => asset.type === 'raster')
-  const tableAssets = assets.filter(asset => asset.type === 'table')
   const [models, setModels] = React.useState<ModelSchema[]>([])
   const [selectedModelId, setSelectedModelId] = React.useState('carbon')
-  const [baselineRaster, setBaselineRaster] = React.useState('')
-  const [alternateRaster, setAlternateRaster] = React.useState('')
-  const [carbonPools, setCarbonPools] = React.useState('')
-  const [calcSequestration, setCalcSequestration] = React.useState(false)
-  const [doValuation, setDoValuation] = React.useState(false)
-  const [baselineYear, setBaselineYear] = React.useState('')
-  const [alternateYear, setAlternateYear] = React.useState('')
-  const [pricePerTon, setPricePerTon] = React.useState('')
-  const [discountRate, setDiscountRate] = React.useState('')
-  const [rateChange, setRateChange] = React.useState('')
-  const [resultsSuffix, setResultsSuffix] = React.useState('mvp')
+  const [formValues, setFormValues] = React.useState<ModelInputValues>({
+    calc_sequestration: false,
+    do_valuation: false,
+    results_suffix: 'mvp',
+    n_workers: -1,
+  })
   const [formError, setFormError] = React.useState<string>()
   const [modelSchema, setModelSchema] = React.useState<ModelSchema>()
   const [modelSchemaError, setModelSchemaError] = React.useState<string>()
@@ -76,27 +73,51 @@ export default function RightPanel() {
   const [checkResult, setCheckResult] = React.useState<CarbonCheckResult>()
   const logsRef = React.useRef<HTMLPreElement | null>(null)
 
+  const setFormValue = React.useCallback((inputId: string, value: ModelInputValue) => {
+    setFormValues(prev => {
+      const next = { ...prev, [inputId]: value }
+      if (inputId === 'calc_sequestration' && value === false) {
+        next.do_valuation = false
+        next.lulc_alt_asset_id = undefined
+      }
+      if (inputId === 'do_valuation' && value === true) {
+        next.calc_sequestration = true
+      }
+      return next
+    })
+    setCheckResult(undefined)
+    setFormError(undefined)
+  }, [])
+
   React.useEffect(() => {
+    const rasterAssets = assets.filter(asset => asset.type === 'raster')
+    const tableAssets = assets.filter(asset => asset.type === 'table')
     const rasterIds = new Set(rasterAssets.map(asset => asset.id))
     const tableIds = new Set(tableAssets.map(asset => asset.id))
+    const baselineRaster = String(formValues.lulc_bas_asset_id ?? '')
+    const alternateRaster = String(formValues.lulc_alt_asset_id ?? '')
+    const carbonPools = String(formValues.carbon_pools_asset_id ?? '')
+    const calcSequestration = Boolean(formValues.calc_sequestration)
 
-    if ((!baselineRaster || !rasterIds.has(baselineRaster)) && rasterAssets[0]) {
-      setBaselineRaster(rasterAssets[0].id)
-    }
-    if (calcSequestration && (!alternateRaster || !rasterIds.has(alternateRaster) || alternateRaster === baselineRaster)) {
-      const fallbackAlt = rasterAssets.find(asset => asset.id !== baselineRaster)
-      setAlternateRaster(fallbackAlt?.id ?? '')
-    }
-    if ((!carbonPools || !tableIds.has(carbonPools)) && tableAssets[0]) {
-      setCarbonPools(tableAssets[0].id)
-    }
-  }, [alternateRaster, baselineRaster, calcSequestration, carbonPools, rasterAssets, tableAssets])
-
-  React.useEffect(() => {
-    if (doValuation && !calcSequestration) {
-      setCalcSequestration(true)
-    }
-  }, [calcSequestration, doValuation])
+    setFormValues(prev => {
+      const next = { ...prev }
+      let changed = false
+      if ((!baselineRaster || !rasterIds.has(baselineRaster)) && rasterAssets[0]) {
+        next.lulc_bas_asset_id = rasterAssets[0].id
+        changed = true
+      }
+      if ((!carbonPools || !tableIds.has(carbonPools)) && tableAssets[0]) {
+        next.carbon_pools_asset_id = tableAssets[0].id
+        changed = true
+      }
+      if (calcSequestration && (!alternateRaster || !rasterIds.has(alternateRaster) || alternateRaster === baselineRaster)) {
+        const fallbackAlt = rasterAssets.find(asset => asset.id !== (next.lulc_bas_asset_id ?? baselineRaster))
+        next.lulc_alt_asset_id = fallbackAlt?.id
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [assets, formValues.carbon_pools_asset_id, formValues.calc_sequestration, formValues.lulc_alt_asset_id, formValues.lulc_bas_asset_id])
 
   React.useEffect(() => {
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
@@ -131,7 +152,12 @@ export default function RightPanel() {
 
   const selectedModel = modelSchema ?? models.find(model => model.id === selectedModelId)
   const selectedModelRunnable = selectedModelId === 'carbon' && selectedModel?.status !== 'planned'
-  const canRun = Boolean(selectedModelRunnable && baselineRaster && carbonPools && activeJobStatus !== 'running')
+  const canRun = Boolean(
+    selectedModelRunnable &&
+    formValues.lulc_bas_asset_id &&
+    formValues.carbon_pools_asset_id &&
+    activeJobStatus !== 'running',
+  )
   const schemaInputs = selectedModel?.inputs ?? []
   const visibleInputCount = schemaInputs.filter(input => !input.hidden).length
   const requiredInputCount = schemaInputs.filter(input => input.required || input.required_if).length
@@ -154,17 +180,18 @@ export default function RightPanel() {
       const baselineId = data.roles?.baseline_lulc ?? data.imported?.find(asset => asset.sample_role === 'baseline_lulc')?.id
       const poolsId = data.roles?.carbon_pools ?? data.imported?.find(asset => asset.sample_role === 'carbon_pools')?.id
       const alternateId = data.roles?.alternate_lulc ?? data.imported?.find(asset => asset.sample_role === 'alternate_lulc')?.id
-      if (baselineId) setBaselineRaster(baselineId)
-      if (poolsId) setCarbonPools(poolsId)
-      if (alternateId) setAlternateRaster(alternateId)
-      if (baselineId && poolsId) {
-        setResultsSuffix('sample_real')
-        setBaselineYear('2020')
-        setAlternateYear('2030')
-        setPricePerTon('43')
-        setDiscountRate('7')
-        setRateChange('0')
-      }
+      setFormValues(prev => ({
+        ...prev,
+        lulc_bas_asset_id: baselineId ?? prev.lulc_bas_asset_id,
+        carbon_pools_asset_id: poolsId ?? prev.carbon_pools_asset_id,
+        lulc_alt_asset_id: alternateId ?? prev.lulc_alt_asset_id,
+        results_suffix: baselineId && poolsId ? 'sample_real' : prev.results_suffix,
+        lulc_bas_year: prev.lulc_bas_year ?? '2020',
+        lulc_alt_year: prev.lulc_alt_year ?? '2030',
+        price_per_metric_ton_of_c: prev.price_per_metric_ton_of_c ?? '43',
+        discount_rate: prev.discount_rate ?? '7',
+        rate_change: prev.rate_change ?? '0',
+      }))
     } catch (error) {
       setImportSampleError(error instanceof Error ? error.message : 'Unable to import sample data')
     } finally {
@@ -172,20 +199,7 @@ export default function RightPanel() {
     }
   }
 
-  const buildCarbonInputs = () => ({
-    lulc_bas_asset_id: baselineRaster,
-    carbon_pools_asset_id: carbonPools,
-    calc_sequestration: calcSequestration,
-    lulc_alt_asset_id: calcSequestration ? alternateRaster : undefined,
-    do_valuation: doValuation,
-    lulc_bas_year: doValuation ? Number(baselineYear) : undefined,
-    lulc_alt_year: doValuation ? Number(alternateYear) : undefined,
-    price_per_metric_ton_of_c: doValuation ? Number(pricePerTon) : undefined,
-    discount_rate: doValuation ? Number(discountRate) : undefined,
-    rate_change: doValuation ? Number(rateChange) : undefined,
-    results_suffix: resultsSuffix.trim() || 'mvp',
-    n_workers: -1,
-  })
+  const buildModelInputs = () => normalizeInputsForSubmit(formValues)
 
   const handleCheckInputs = async () => {
     setFormError(undefined)
@@ -196,7 +210,7 @@ export default function RightPanel() {
       const response = await fetch(`${apiBaseUrl}/api/models/carbon/check-inputs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inputs: buildCarbonInputs() }),
+        body: JSON.stringify({ inputs: buildModelInputs() }),
       })
       if (!response.ok) throw new Error(`Input check returned ${response.status}`)
       setCheckResult((await response.json()) as CarbonCheckResult)
@@ -209,36 +223,40 @@ export default function RightPanel() {
 
   const handleRun = async () => {
     setFormError(undefined)
-    if (!baselineRaster || !carbonPools) {
+    if (!formValues.lulc_bas_asset_id || !formValues.carbon_pools_asset_id) {
       setFormError('Baseline LULC raster and carbon pools CSV are required.')
       return
     }
-    if (calcSequestration && (!alternateRaster || alternateRaster === baselineRaster)) {
+    if (
+      formValues.calc_sequestration &&
+      (!formValues.lulc_alt_asset_id || formValues.lulc_alt_asset_id === formValues.lulc_bas_asset_id)
+    ) {
       setFormError('A distinct alternate LULC raster is required when sequestration is enabled.')
       return
     }
-    if (doValuation) {
+    if (formValues.do_valuation) {
       const values = [
-        ['Baseline LULC year', baselineYear],
-        ['Alternate LULC year', alternateYear],
-        ['Price per metric ton of carbon', pricePerTon],
-        ['Annual discount rate', discountRate],
-        ['Annual price change', rateChange],
+        ['Baseline LULC year', formValues.lulc_bas_year],
+        ['Alternate LULC year', formValues.lulc_alt_year],
+        ['Price per metric ton of carbon', formValues.price_per_metric_ton_of_c],
+        ['Annual discount rate', formValues.discount_rate],
+        ['Annual price change', formValues.rate_change],
       ]
       const missing = values.find(([, value]) => !String(value).trim())
       if (missing) {
         setFormError(`${missing[0]} is required when valuation is enabled.`)
         return
       }
-      if (Number(baselineYear) >= Number(alternateYear)) {
+      if (Number(formValues.lulc_bas_year) >= Number(formValues.lulc_alt_year)) {
         setFormError('Alternate LULC year must be greater than baseline LULC year.')
         return
       }
     }
     try {
-      await runCarbonJob({
+      await runModelJob({
+        modelId: selectedModelId,
         runMode,
-        inputs: buildCarbonInputs(),
+        inputs: buildModelInputs(),
       })
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to create job')
@@ -276,6 +294,7 @@ export default function RightPanel() {
               value={selectedModelId}
               onChange={event => {
                 setSelectedModelId(event.target.value)
+                setModelSchema(undefined)
                 setCheckResult(undefined)
                 setFormError(undefined)
               }}
@@ -318,75 +337,12 @@ export default function RightPanel() {
           )}
 
           <div className="mt-4 flex flex-col gap-4">
-            <SchemaSummary inputs={schemaInputs} />
-            <AssetSelect
-              label="Baseline LULC raster"
-              icon={<Database aria-hidden="true" className="size-4" />}
-              value={baselineRaster}
-              assets={rasterAssets}
-              emptyLabel="No raster assets"
-              onChange={setBaselineRaster}
+            <ModelFormRenderer
+              assets={assets}
+              inputs={schemaInputs}
+              values={formValues}
+              onChange={setFormValue}
             />
-            <AssetSelect
-              label="Carbon pools table"
-              icon={<FileText aria-hidden="true" className="size-4" />}
-              value={carbonPools}
-              assets={tableAssets}
-              emptyLabel="No CSV assets"
-              onChange={setCarbonPools}
-            />
-            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
-              <span>
-                Calculate sequestration
-                <span className="mt-0.5 block text-xs font-normal text-slate-500">Enable baseline vs alternate scenario outputs.</span>
-              </span>
-              <input
-                className="size-4 accent-slate-900"
-                type="checkbox"
-                checked={calcSequestration}
-                onChange={event => {
-                  setCalcSequestration(event.target.checked)
-                  if (!event.target.checked) setDoValuation(false)
-                }}
-              />
-            </label>
-            {calcSequestration && (
-              <AssetSelect
-                label="Alternate LULC raster"
-                icon={<Database aria-hidden="true" className="size-4" />}
-                value={alternateRaster}
-                assets={rasterAssets.filter(asset => asset.id !== baselineRaster)}
-                emptyLabel="No alternate raster assets"
-                onChange={setAlternateRaster}
-              />
-            )}
-            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
-              <span>
-                Run valuation model
-                <span className="mt-0.5 block text-xs font-normal text-slate-500">Requires sequestration and scenario years.</span>
-              </span>
-              <input
-                className="size-4 accent-slate-900"
-                type="checkbox"
-                checked={doValuation}
-                onChange={event => setDoValuation(event.target.checked)}
-              />
-            </label>
-            {doValuation && (
-              <div className="grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <NumberField label="Baseline year" value={baselineYear} placeholder="2020" onChange={setBaselineYear} />
-                <NumberField label="Alternate year" value={alternateYear} placeholder="2030" onChange={setAlternateYear} />
-                <NumberField label="Carbon price" value={pricePerTon} placeholder="43" onChange={setPricePerTon} />
-                <NumberField label="Discount rate" value={discountRate} placeholder="7" onChange={setDiscountRate} />
-                <div className="col-span-2">
-                  <NumberField label="Annual price change" value={rateChange} placeholder="0" onChange={setRateChange} />
-                </div>
-              </div>
-            )}
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Results suffix
-              <Input value={resultsSuffix} onChange={event => setResultsSuffix(event.target.value)} />
-            </label>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Runner mode
               <select
@@ -565,26 +521,230 @@ type SelectAsset = {
   name: string
 }
 
+function normalizeInputsForSubmit(values: ModelInputValues) {
+  const normalized: Record<string, string | boolean | number | undefined> = {
+    ...values,
+    n_workers: values.n_workers ?? -1,
+  }
+  const booleanKeys = new Set(['calc_sequestration', 'do_valuation'])
+  const numberKeys = new Set([
+    'lulc_bas_year',
+    'lulc_alt_year',
+    'price_per_metric_ton_of_c',
+    'discount_rate',
+    'rate_change',
+    'n_workers',
+  ])
+
+  Object.entries(normalized).forEach(([key, value]) => {
+    if (value === '') {
+      normalized[key] = undefined
+      return
+    }
+    if (booleanKeys.has(key)) {
+      normalized[key] = Boolean(value)
+      return
+    }
+    if (numberKeys.has(key) && value !== undefined) {
+      normalized[key] = Number(value)
+    }
+  })
+
+  if (!normalized.calc_sequestration) {
+    normalized.lulc_alt_asset_id = undefined
+    normalized.do_valuation = false
+  }
+  if (!normalized.do_valuation) {
+    normalized.lulc_bas_year = undefined
+    normalized.lulc_alt_year = undefined
+    normalized.price_per_metric_ton_of_c = undefined
+    normalized.discount_rate = undefined
+    normalized.rate_change = undefined
+  }
+
+  if (!normalized.results_suffix || typeof normalized.results_suffix !== 'string') {
+    normalized.results_suffix = 'mvp'
+  } else {
+    normalized.results_suffix = normalized.results_suffix.trim() || 'mvp'
+  }
+
+  return normalized
+}
+
+function isInputAllowed(input: ModelInputSpec, values: ModelInputValues) {
+  if (!input.allowed_if) return true
+  return Boolean(values[input.allowed_if])
+}
+
+function assetIcon(assetType?: AssetType) {
+  if (assetType === 'table') return <FileText aria-hidden="true" className="size-4" />
+  return <Database aria-hidden="true" className="size-4" />
+}
+
+function ModelFormRenderer({
+  inputs,
+  values,
+  assets,
+  onChange,
+}: {
+  inputs: ModelInputSpec[]
+  values: ModelInputValues
+  assets: Asset[]
+  onChange: (inputId: string, value: ModelInputValue) => void
+}) {
+  const visibleInputs = inputs.filter(input => !input.hidden && isInputAllowed(input, values))
+  if (visibleInputs.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
+        No runnable parameters are available for this model yet.
+      </div>
+    )
+  }
+
+  const groups = visibleInputs.reduce<Record<string, ModelInputSpec[]>>((acc, input) => {
+    const group = input.group ?? 'Parameters'
+    acc[group] = [...(acc[group] ?? []), input]
+    return acc
+  }, {})
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SchemaSummary inputs={inputs} />
+      {Object.entries(groups).map(([group, groupInputs]) => (
+        <section key={group} className="rounded-md border border-slate-200 bg-white p-3">
+          <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">{group}</div>
+          <div className="flex flex-col gap-3">
+            {groupInputs.map(input => (
+              <ModelInputControl
+                key={input.id}
+                input={input}
+                value={values[input.id]}
+                values={values}
+                assets={assets}
+                onChange={onChange}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
+function ModelInputControl({
+  input,
+  value,
+  values,
+  assets,
+  onChange,
+}: {
+  input: ModelInputSpec
+  value: ModelInputValue
+  values: ModelInputValues
+  assets: Asset[]
+  onChange: (inputId: string, value: ModelInputValue) => void
+}) {
+  const required = Boolean(input.required || (input.required_if && values[input.required_if]))
+  const label = (
+    <span className="flex flex-col gap-0.5">
+      <span>
+        {input.label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
+      {input.help && <span className="text-xs font-normal leading-4 text-slate-500">{input.help}</span>}
+    </span>
+  )
+
+  if (input.kind === 'asset') {
+    const assetType = input.asset_type ?? 'unknown'
+    const matchingAssets = assets
+      .filter(asset => asset.type === assetType)
+      .filter(asset => {
+        if (input.id !== 'lulc_alt_asset_id') return true
+        return asset.id !== values.lulc_bas_asset_id
+      })
+
+    return (
+      <AssetSelect
+        label={input.label}
+        help={input.help}
+        icon={assetIcon(assetType)}
+        value={String(value ?? '')}
+        assets={matchingAssets}
+        emptyLabel={`No ${assetType} assets`}
+        required={required}
+        onChange={nextValue => onChange(input.id, nextValue)}
+      />
+    )
+  }
+
+  if (input.kind === 'boolean') {
+    return (
+      <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
+        {label}
+        <input
+          className="size-4 accent-slate-900"
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={event => onChange(input.id, event.target.checked)}
+        />
+      </label>
+    )
+  }
+
+  if (input.kind === 'number') {
+    return (
+      <NumberField
+        label={input.label}
+        help={input.help}
+        required={required}
+        value={value === undefined ? '' : String(value)}
+        placeholder={input.default === undefined ? String(input.placeholder ?? '') : String(input.default)}
+        onChange={nextValue => onChange(input.id, nextValue)}
+      />
+    )
+  }
+
+  return (
+    <label className="flex flex-col gap-1.5 text-sm font-medium">
+      {label}
+      <Input
+        value={value === undefined ? '' : String(value)}
+        placeholder={input.default === undefined ? undefined : String(input.default)}
+        onChange={event => onChange(input.id, event.target.value)}
+      />
+    </label>
+  )
+}
+
 function AssetSelect({
   label,
+  help,
   icon,
   value,
   assets,
   emptyLabel,
+  required,
   onChange,
 }: {
   label: string
+  help?: string
   icon: React.ReactNode
   value: string
   assets: SelectAsset[]
   emptyLabel: string
+  required?: boolean
   onChange: (value: string) => void
 }) {
   return (
     <label className="flex flex-col gap-1.5 text-sm font-medium">
-      <span className="flex items-center gap-2">
-        {icon}
-        {label}
+      <span className="flex items-start gap-2">
+        <span className="mt-0.5">{icon}</span>
+        <span>
+          {label}
+          {required && <span className="text-red-500"> *</span>}
+          {help && <span className="mt-0.5 block text-xs font-normal leading-4 text-slate-500">{help}</span>}
+        </span>
       </span>
       <select
         className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-500"
@@ -608,18 +768,26 @@ function AssetSelect({
 
 function NumberField({
   label,
+  help,
+  required,
   value,
   placeholder,
   onChange,
 }: {
   label: string
+  help?: string
+  required?: boolean
   value: string
   placeholder?: string
   onChange: (value: string) => void
 }) {
   return (
-    <label className="flex flex-col gap-1.5 text-xs font-medium text-slate-700">
-      {label}
+    <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
+      <span>
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+        {help && <span className="mt-0.5 block text-xs font-normal leading-4 text-slate-500">{help}</span>}
+      </span>
       <Input
         type="number"
         value={value}

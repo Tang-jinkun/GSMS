@@ -81,7 +81,8 @@ export type JobOutput = {
 
 export type RunMode = 'auto' | 'real'
 
-export type CarbonJobRequest = {
+export type ModelJobRequest = {
+  modelId: string
   inputs: Record<string, string | boolean | number | undefined>
   runMode?: RunMode
 }
@@ -111,7 +112,7 @@ type Stores = {
   updateLayer: (layerId: string, patch: Partial<Layer>) => void
   removeLayer: (layerId: string) => void
   zoomToLayer: (layerId: string) => void
-  runCarbonJob: (request: CarbonJobRequest) => Promise<void>
+  runModelJob: (request: ModelJobRequest) => Promise<void>
   loadJobHistory: () => Promise<void>
   selectJob: (jobId: string) => Promise<void>
   loadJobOutputs: (jobId: string) => Promise<void>
@@ -507,14 +508,14 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     })
   }, [layers])
 
-  const runCarbonJob = React.useCallback(async ({ inputs, runMode = 'auto' }: CarbonJobRequest) => {
+  const runModelJob = React.useCallback(async ({ modelId, inputs, runMode = 'auto' }: ModelJobRequest) => {
     setActiveJobStatus('running')
-    setLogs(`Creating Carbon job in ${runMode} mode...\n`)
+    setLogs(`Creating ${modelId} job in ${runMode} mode...\n`)
     setOutputs([])
     const response = await fetch(`${apiBaseUrl}/api/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId: 'carbon', run_mode: runMode, inputs }),
+      body: JSON.stringify({ modelId, run_mode: runMode, inputs }),
     })
     if (!response.ok) {
       setActiveJobStatus('failed')
@@ -630,7 +631,7 @@ export function StoresProvider({ children }: { children: React.ReactNode }) {
     updateLayer,
     removeLayer,
     zoomToLayer,
-    runCarbonJob,
+    runModelJob,
     loadJobHistory,
     selectJob,
     loadJobOutputs,
@@ -683,7 +684,7 @@ export function useJobsStore() {
     logs: ctx.logs,
     outputs: ctx.outputs,
     jobHistory: ctx.jobHistory,
-    runCarbonJob: ctx.runCarbonJob,
+    runModelJob: ctx.runModelJob,
     loadJobHistory: ctx.loadJobHistory,
     selectJob: ctx.selectJob,
     loadJobOutputs: ctx.loadJobOutputs,
