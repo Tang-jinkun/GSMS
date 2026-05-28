@@ -42,32 +42,146 @@ MODEL_REGISTRY = [
     {
         "id": "carbon",
         "name": "Carbon Storage and Sequestration",
+        "family": "Terrestrial",
         "description": "Estimate carbon storage from a baseline LULC raster and carbon pools table. The runner uses natcap.invest when installed and falls back to explicit development stub outputs in auto mode.",
         "status": "auto",
+        "runner": "natcap.invest.carbon.execute",
         "inputs": [
             {
                 "id": "lulc_bas_asset_id",
+                "invest_arg": "lulc_bas_path",
                 "label": "Baseline LULC raster",
+                "help": "Baseline land-use/land-cover raster. Raster values must match lucode values in the carbon pools table.",
+                "kind": "asset",
                 "asset_type": "raster",
+                "group": "Required inputs",
                 "required": True,
             },
             {
                 "id": "carbon_pools_asset_id",
+                "invest_arg": "carbon_pools_path",
                 "label": "Carbon pools table",
+                "help": "CSV table with lucode, c_above, c_below, c_soil and c_dead columns.",
+                "kind": "asset",
                 "asset_type": "table",
+                "group": "Required inputs",
                 "required": True,
             },
             {
+                "id": "calc_sequestration",
+                "invest_arg": "calc_sequestration",
+                "label": "Calculate sequestration",
+                "help": "Run baseline-to-alternate carbon change analysis.",
+                "kind": "boolean",
+                "group": "Scenario analysis",
+                "required": False,
+                "default": False,
+            },
+            {
+                "id": "lulc_alt_asset_id",
+                "invest_arg": "lulc_alt_path",
+                "label": "Alternate LULC raster",
+                "help": "Required when sequestration is enabled. Must align with the baseline LULC raster.",
+                "kind": "asset",
+                "asset_type": "raster",
+                "group": "Scenario analysis",
+                "required_if": "calc_sequestration",
+                "allowed_if": "calc_sequestration",
+            },
+            {
+                "id": "do_valuation",
+                "invest_arg": "do_valuation",
+                "label": "Run valuation model",
+                "help": "Calculate net present value for carbon change. Requires sequestration and baseline/alternate years.",
+                "kind": "boolean",
+                "group": "Valuation",
+                "required": False,
+                "allowed_if": "calc_sequestration",
+                "default": False,
+            },
+            {
+                "id": "lulc_bas_year",
+                "invest_arg": "lulc_bas_year",
+                "label": "Baseline LULC year",
+                "help": "Calendar year represented by the baseline LULC raster.",
+                "kind": "number",
+                "group": "Valuation",
+                "required_if": "do_valuation",
+                "allowed_if": "do_valuation",
+                "integer": True,
+                "placeholder": 2020,
+            },
+            {
+                "id": "lulc_alt_year",
+                "invest_arg": "lulc_alt_year",
+                "label": "Alternate LULC year",
+                "help": "Calendar year represented by the alternate LULC raster. Must be greater than the baseline year.",
+                "kind": "number",
+                "group": "Valuation",
+                "required_if": "do_valuation",
+                "allowed_if": "do_valuation",
+                "integer": True,
+                "placeholder": 2030,
+            },
+            {
+                "id": "price_per_metric_ton_of_c",
+                "invest_arg": "price_per_metric_ton_of_c",
+                "label": "Price per metric ton of carbon",
+                "help": "Present value of carbon per metric ton.",
+                "kind": "number",
+                "group": "Valuation",
+                "required_if": "do_valuation",
+                "allowed_if": "do_valuation",
+                "placeholder": 43,
+            },
+            {
+                "id": "discount_rate",
+                "invest_arg": "discount_rate",
+                "label": "Annual discount rate",
+                "help": "Annual market discount rate used for net present value calculations.",
+                "kind": "number",
+                "group": "Valuation",
+                "required_if": "do_valuation",
+                "allowed_if": "do_valuation",
+                "placeholder": 7,
+            },
+            {
+                "id": "rate_change",
+                "invest_arg": "rate_change",
+                "label": "Annual price change",
+                "help": "Expected annual percentage change in carbon price.",
+                "kind": "number",
+                "group": "Valuation",
+                "required_if": "do_valuation",
+                "allowed_if": "do_valuation",
+                "placeholder": 0,
+            },
+            {
                 "id": "results_suffix",
+                "invest_arg": "results_suffix",
                 "label": "Results suffix",
+                "help": "Suffix appended to model outputs.",
+                "kind": "string",
+                "group": "Runtime",
                 "type": "string",
                 "required": False,
                 "default": "mvp",
             },
+            {
+                "id": "n_workers",
+                "invest_arg": "n_workers",
+                "label": "Worker count",
+                "help": "-1 runs synchronously. Positive values allow worker processes when supported.",
+                "kind": "number",
+                "group": "Runtime",
+                "required": False,
+                "default": -1,
+                "hidden": True,
+            },
         ],
         "outputs": [
             {
-                "name": "carbon_output_{results_suffix}.tif",
+                "name": "c_storage_bas_{results_suffix}.tif",
                 "type": "raster",
                 "map_default": True,
             },
@@ -82,7 +196,37 @@ MODEL_REGISTRY = [
                 "map_default": False,
             },
         ],
-    }
+    },
+    {
+        "id": "habitat_quality",
+        "name": "Habitat Quality",
+        "family": "Terrestrial",
+        "description": "Registered placeholder for future Habitat Quality support. Schema and runner are not wired yet.",
+        "status": "planned",
+        "runner": None,
+        "inputs": [],
+        "outputs": [],
+    },
+    {
+        "id": "annual_water_yield",
+        "name": "Annual Water Yield",
+        "family": "Freshwater",
+        "description": "Registered placeholder for future Annual Water Yield support. Schema and runner are not wired yet.",
+        "status": "planned",
+        "runner": None,
+        "inputs": [],
+        "outputs": [],
+    },
+    {
+        "id": "sediment_delivery_ratio",
+        "name": "Sediment Delivery Ratio",
+        "family": "Freshwater",
+        "description": "Registered placeholder for future SDR support. Schema and runner are not wired yet.",
+        "status": "planned",
+        "runner": None,
+        "inputs": [],
+        "outputs": [],
+    },
 ]
 
 
@@ -554,6 +698,7 @@ async def check_carbon_inputs(payload: dict):
     baseline_id = str(inputs.get("lulc_bas_asset_id") or "")
     carbon_pools_id = str(inputs.get("carbon_pools_asset_id") or "")
     calc_sequestration = bool(inputs.get("calc_sequestration", False))
+    do_valuation = bool(inputs.get("do_valuation", False))
     alternate_id = str(inputs.get("lulc_alt_asset_id") or "")
 
     baseline_path = ASSETS_DIR / Path(baseline_id).name if baseline_id else None
@@ -574,6 +719,9 @@ async def check_carbon_inputs(payload: dict):
     elif carbon_pools_path.suffix.lower() != ".csv":
         errors.append(f"Carbon pools input must be a CSV file: {carbon_pools_id}")
 
+    if do_valuation and not calc_sequestration:
+        errors.append("Valuation requires Calculate sequestration to be enabled.")
+
     if calc_sequestration:
         if not alternate_path:
             errors.append("Alternate LULC raster is required when sequestration is enabled.")
@@ -583,6 +731,37 @@ async def check_carbon_inputs(payload: dict):
             errors.append(f"Alternate LULC raster must be a GeoTIFF: {alternate_id}")
         elif baseline_path and baseline_path.exists() and alternate_path.resolve() == baseline_path.resolve():
             errors.append("Alternate LULC raster must be different from baseline LULC raster.")
+
+    if do_valuation:
+        valuation_fields = [
+            ("lulc_bas_year", "Baseline LULC year"),
+            ("lulc_alt_year", "Alternate LULC year"),
+            ("price_per_metric_ton_of_c", "Price per metric ton of carbon"),
+            ("discount_rate", "Annual discount rate"),
+            ("rate_change", "Annual price change"),
+        ]
+        parsed_valuation: dict[str, float] = {}
+        for key, label in valuation_fields:
+            value = inputs.get(key)
+            if value in ("", None):
+                errors.append(f"{label} is required when valuation is enabled.")
+                continue
+            try:
+                parsed_valuation[key] = float(value)
+            except (TypeError, ValueError):
+                errors.append(f"{label} must be numeric.")
+
+        if "lulc_bas_year" in parsed_valuation:
+            if not parsed_valuation["lulc_bas_year"].is_integer():
+                errors.append("Baseline LULC year must be an integer year.")
+        if "lulc_alt_year" in parsed_valuation:
+            if not parsed_valuation["lulc_alt_year"].is_integer():
+                errors.append("Alternate LULC year must be an integer year.")
+        if {"lulc_bas_year", "lulc_alt_year"} <= set(parsed_valuation):
+            if parsed_valuation["lulc_bas_year"] >= parsed_valuation["lulc_alt_year"]:
+                errors.append("Alternate LULC year must be greater than baseline LULC year.")
+
+        details["valuation"] = parsed_valuation
 
     if errors:
         return {

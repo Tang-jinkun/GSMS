@@ -152,6 +152,7 @@ def main() -> int:
     model_id = str(job_payload.get("modelId") or job_payload.get("model_id") or "carbon")
     results_suffix = str(job_inputs.get("results_suffix") or "mvp")
     calc_sequestration = bool(job_inputs.get("calc_sequestration", False))
+    do_valuation = bool(job_inputs.get("do_valuation", False))
     run_mode = str(job_payload.get("run_mode") or os.environ.get("INVEST_RUNNER_MODE", "auto")).lower()
 
     baseline_asset_id = str(job_inputs.get("lulc_bas_asset_id") or "")
@@ -170,6 +171,8 @@ def main() -> int:
             log(handle, f"baseline asset: {baseline_asset_id or 'missing'}")
             log(handle, f"carbon pools asset: {carbon_pools_asset_id or 'missing'}")
             log(handle, f"alternate asset: {alt_asset_id or 'none'}")
+            log(handle, f"calculate sequestration: {calc_sequestration}")
+            log(handle, f"run valuation: {do_valuation}")
             log(handle, f"results suffix: {results_suffix}")
 
             if model_id != "carbon":
@@ -186,6 +189,24 @@ def main() -> int:
                 if not alt_path:
                     raise ValueError("alternate LULC raster is required when calc_sequestration is true")
                 validate_raster(alt_path, "alternate LULC raster")
+            if do_valuation:
+                if not calc_sequestration:
+                    raise ValueError("valuation requires calc_sequestration to be true")
+                required_valuation = [
+                    "lulc_bas_year",
+                    "lulc_alt_year",
+                    "price_per_metric_ton_of_c",
+                    "discount_rate",
+                    "rate_change",
+                ]
+                missing = [key for key in required_valuation if job_inputs.get(key) in ("", None)]
+                if missing:
+                    raise ValueError(f"valuation inputs are missing: {', '.join(missing)}")
+
+                bas_year = int(float(job_inputs["lulc_bas_year"]))
+                alt_year = int(float(job_inputs["lulc_alt_year"]))
+                if bas_year >= alt_year:
+                    raise ValueError("alternate LULC year must be greater than baseline LULC year")
 
             execute = None
             module_name = None
@@ -207,11 +228,20 @@ def main() -> int:
                     "lulc_bas_path": str(baseline_path),
                     "carbon_pools_path": str(carbon_pools_path),
                     "calc_sequestration": calc_sequestration,
+                    "do_valuation": do_valuation,
                     "results_suffix": results_suffix,
                     "n_workers": int(job_inputs.get("n_workers", -1)),
                 }
                 if calc_sequestration and alt_path:
                     invest_args["lulc_alt_path"] = str(alt_path)
+                if do_valuation:
+                    invest_args.update({
+                        "lulc_bas_year": int(float(job_inputs["lulc_bas_year"])),
+                        "lulc_alt_year": int(float(job_inputs["lulc_alt_year"])),
+                        "price_per_metric_ton_of_c": float(job_inputs["price_per_metric_ton_of_c"]),
+                        "discount_rate": float(job_inputs["discount_rate"]),
+                        "rate_change": float(job_inputs["rate_change"]),
+                    })
 
                 log(handle, f"running {module_name}.execute")
                 execute(invest_args)

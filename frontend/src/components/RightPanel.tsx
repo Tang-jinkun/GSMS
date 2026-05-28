@@ -1,5 +1,5 @@
 import React from 'react'
-import { CheckCircle2, Clipboard, Clock3, Database, Download, FileSearch, FileText, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Clipboard, Clock3, Database, Download, FileSearch, FileText, Layers3, Loader2, Play, Plus, TriangleAlert } from 'lucide-react'
 import { useAssetsStore, useJobsStore, useLayersStore, type RunMode } from '../stores/useStores'
 import { Button } from './ui'
 import Input from './ui/Input'
@@ -7,10 +7,26 @@ import Input from './ui/Input'
 type ModelSchema = {
   id: string
   name: string
+  family?: string
   description?: string
   status?: string
-  inputs?: Array<{ id: string; label: string; required?: boolean }>
+  runner?: string | null
+  inputs?: ModelInputSpec[]
   outputs?: Array<{ name: string; type: string; map_default?: boolean }>
+}
+
+type ModelInputSpec = {
+  id: string
+  label: string
+  help?: string
+  kind?: 'asset' | 'boolean' | 'number' | 'string'
+  asset_type?: 'raster' | 'table' | 'geojson' | 'document' | 'unknown'
+  group?: string
+  required?: boolean
+  required_if?: string
+  allowed_if?: string
+  default?: string | number | boolean
+  hidden?: boolean
 }
 
 type CarbonSampleImportResponse = {
@@ -36,10 +52,18 @@ export default function RightPanel() {
   const { addOutputLayer } = useLayersStore()
   const rasterAssets = assets.filter(asset => asset.type === 'raster')
   const tableAssets = assets.filter(asset => asset.type === 'table')
+  const [models, setModels] = React.useState<ModelSchema[]>([])
+  const [selectedModelId, setSelectedModelId] = React.useState('carbon')
   const [baselineRaster, setBaselineRaster] = React.useState('')
   const [alternateRaster, setAlternateRaster] = React.useState('')
   const [carbonPools, setCarbonPools] = React.useState('')
   const [calcSequestration, setCalcSequestration] = React.useState(false)
+  const [doValuation, setDoValuation] = React.useState(false)
+  const [baselineYear, setBaselineYear] = React.useState('')
+  const [alternateYear, setAlternateYear] = React.useState('')
+  const [pricePerTon, setPricePerTon] = React.useState('')
+  const [discountRate, setDiscountRate] = React.useState('')
+  const [rateChange, setRateChange] = React.useState('')
   const [resultsSuffix, setResultsSuffix] = React.useState('mvp')
   const [formError, setFormError] = React.useState<string>()
   const [modelSchema, setModelSchema] = React.useState<ModelSchema>()
@@ -69,9 +93,27 @@ export default function RightPanel() {
   }, [alternateRaster, baselineRaster, calcSequestration, carbonPools, rasterAssets, tableAssets])
 
   React.useEffect(() => {
+    if (doValuation && !calcSequestration) {
+      setCalcSequestration(true)
+    }
+  }, [calcSequestration, doValuation])
+
+  React.useEffect(() => {
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
     let cancelled = false
-    fetch(`${apiBaseUrl}/api/models/carbon/schema`)
+    fetch(`${apiBaseUrl}/api/models`)
+      .then(response => {
+        if (!response.ok) throw new Error(`Models API returned ${response.status}`)
+        return response.json()
+      })
+      .then((modelList: ModelSchema[]) => {
+        if (!cancelled) setModels(Array.isArray(modelList) ? modelList : [])
+      })
+      .catch(error => {
+        if (!cancelled) setModelSchemaError(error instanceof Error ? error.message : 'Unable to load model registry')
+      })
+
+    fetch(`${apiBaseUrl}/api/models/${selectedModelId}/schema`)
       .then(response => {
         if (!response.ok) throw new Error(`Model schema API returned ${response.status}`)
         return response.json()
@@ -85,9 +127,14 @@ export default function RightPanel() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [selectedModelId])
 
-  const canRun = Boolean(baselineRaster && carbonPools && activeJobStatus !== 'running')
+  const selectedModel = modelSchema ?? models.find(model => model.id === selectedModelId)
+  const selectedModelRunnable = selectedModelId === 'carbon' && selectedModel?.status !== 'planned'
+  const canRun = Boolean(selectedModelRunnable && baselineRaster && carbonPools && activeJobStatus !== 'running')
+  const schemaInputs = selectedModel?.inputs ?? []
+  const visibleInputCount = schemaInputs.filter(input => !input.hidden).length
+  const requiredInputCount = schemaInputs.filter(input => input.required || input.required_if).length
 
   React.useEffect(() => {
     const logPanel = logsRef.current
@@ -112,6 +159,11 @@ export default function RightPanel() {
       if (alternateId) setAlternateRaster(alternateId)
       if (baselineId && poolsId) {
         setResultsSuffix('sample_real')
+        setBaselineYear('2020')
+        setAlternateYear('2030')
+        setPricePerTon('43')
+        setDiscountRate('7')
+        setRateChange('0')
       }
     } catch (error) {
       setImportSampleError(error instanceof Error ? error.message : 'Unable to import sample data')
@@ -125,6 +177,12 @@ export default function RightPanel() {
     carbon_pools_asset_id: carbonPools,
     calc_sequestration: calcSequestration,
     lulc_alt_asset_id: calcSequestration ? alternateRaster : undefined,
+    do_valuation: doValuation,
+    lulc_bas_year: doValuation ? Number(baselineYear) : undefined,
+    lulc_alt_year: doValuation ? Number(alternateYear) : undefined,
+    price_per_metric_ton_of_c: doValuation ? Number(pricePerTon) : undefined,
+    discount_rate: doValuation ? Number(discountRate) : undefined,
+    rate_change: doValuation ? Number(rateChange) : undefined,
     results_suffix: resultsSuffix.trim() || 'mvp',
     n_workers: -1,
   })
@@ -159,6 +217,24 @@ export default function RightPanel() {
       setFormError('A distinct alternate LULC raster is required when sequestration is enabled.')
       return
     }
+    if (doValuation) {
+      const values = [
+        ['Baseline LULC year', baselineYear],
+        ['Alternate LULC year', alternateYear],
+        ['Price per metric ton of carbon', pricePerTon],
+        ['Annual discount rate', discountRate],
+        ['Annual price change', rateChange],
+      ]
+      const missing = values.find(([, value]) => !String(value).trim())
+      if (missing) {
+        setFormError(`${missing[0]} is required when valuation is enabled.`)
+        return
+      }
+      if (Number(baselineYear) >= Number(alternateYear)) {
+        setFormError('Alternate LULC year must be greater than baseline LULC year.')
+        return
+      }
+    }
     try {
       await runCarbonJob({
         runMode,
@@ -185,7 +261,7 @@ export default function RightPanel() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold">Model run</h2>
-            <p className="text-xs text-slate-500">Carbon Storage and Sequestration</p>
+            <p className="text-xs text-slate-500">{selectedModel?.name ?? 'InVEST model workbench'}</p>
           </div>
           <StatusBadge status={activeJobStatus} />
         </div>
@@ -195,24 +271,44 @@ export default function RightPanel() {
         <section className="border-b border-slate-200 p-4">
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Model
-            <select className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200" value="carbon" onChange={() => undefined}>
-              <option value="carbon">{modelSchema?.name ?? 'Carbon Storage and Sequestration'}</option>
+            <select
+              className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+              value={selectedModelId}
+              onChange={event => {
+                setSelectedModelId(event.target.value)
+                setCheckResult(undefined)
+                setFormError(undefined)
+              }}
+            >
+              {(models.length ? models : [{ id: 'carbon', name: 'Carbon Storage and Sequestration', status: 'auto' }]).map(model => (
+                <option key={model.id} value={model.id}>
+                  {model.name}{model.status === 'planned' ? ' (planned)' : ''}
+                </option>
+              ))}
             </select>
           </label>
           <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
             <div className="flex items-center justify-between gap-3">
-              <span className="font-medium text-slate-800">{modelSchema?.status ?? 'stub'} runner</span>
-              <span>{modelSchema?.inputs?.filter(input => input.required).length ?? 2} required inputs</span>
+              <span className="font-medium text-slate-800">{selectedModel?.status ?? 'stub'} runner</span>
+              <span>{requiredInputCount || 2} required / {visibleInputCount || 0} visible inputs</span>
             </div>
             <p className="mt-1 leading-5">
-              {modelSchema?.description ?? modelSchemaError ?? 'Backend model schema will appear when the API is available.'}
+              {selectedModel?.description ?? modelSchemaError ?? 'Backend model schema will appear when the API is available.'}
             </p>
+            {selectedModel?.runner && <p className="mt-1 font-mono text-[11px] text-slate-500">{selectedModel.runner}</p>}
           </div>
 
-          <Button variant="outline" className="mt-3 w-full" disabled={importingSample} onClick={() => void handleImportSample()}>
-            {importingSample ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Plus aria-hidden="true" />}
-            Import sample Carbon data
-          </Button>
+          {selectedModelId === 'carbon' ? (
+            <Button variant="outline" className="mt-3 w-full" disabled={importingSample} onClick={() => void handleImportSample()}>
+              {importingSample ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Plus aria-hidden="true" />}
+              Import sample Carbon data
+            </Button>
+          ) : (
+            <div className="mt-3 flex gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+              <Layers3 aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+              <span>This model is registered for the workbench roadmap but its runnable schema is not implemented yet.</span>
+            </div>
+          )}
 
           {importSampleError && (
             <div className="mt-3 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -221,7 +317,8 @@ export default function RightPanel() {
             </div>
           )}
 
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="mt-4 flex flex-col gap-4">
+            <SchemaSummary inputs={schemaInputs} />
             <AssetSelect
               label="Baseline LULC raster"
               icon={<Database aria-hidden="true" className="size-4" />}
@@ -239,12 +336,18 @@ export default function RightPanel() {
               onChange={setCarbonPools}
             />
             <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
-              <span>Calculate sequestration</span>
+              <span>
+                Calculate sequestration
+                <span className="mt-0.5 block text-xs font-normal text-slate-500">Enable baseline vs alternate scenario outputs.</span>
+              </span>
               <input
                 className="size-4 accent-slate-900"
                 type="checkbox"
                 checked={calcSequestration}
-                onChange={event => setCalcSequestration(event.target.checked)}
+                onChange={event => {
+                  setCalcSequestration(event.target.checked)
+                  if (!event.target.checked) setDoValuation(false)
+                }}
               />
             </label>
             {calcSequestration && (
@@ -256,6 +359,29 @@ export default function RightPanel() {
                 emptyLabel="No alternate raster assets"
                 onChange={setAlternateRaster}
               />
+            )}
+            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm">
+              <span>
+                Run valuation model
+                <span className="mt-0.5 block text-xs font-normal text-slate-500">Requires sequestration and scenario years.</span>
+              </span>
+              <input
+                className="size-4 accent-slate-900"
+                type="checkbox"
+                checked={doValuation}
+                onChange={event => setDoValuation(event.target.checked)}
+              />
+            </label>
+            {doValuation && (
+              <div className="grid grid-cols-2 gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <NumberField label="Baseline year" value={baselineYear} placeholder="2020" onChange={setBaselineYear} />
+                <NumberField label="Alternate year" value={alternateYear} placeholder="2030" onChange={setAlternateYear} />
+                <NumberField label="Carbon price" value={pricePerTon} placeholder="43" onChange={setPricePerTon} />
+                <NumberField label="Discount rate" value={discountRate} placeholder="7" onChange={setDiscountRate} />
+                <div className="col-span-2">
+                  <NumberField label="Annual price change" value={rateChange} placeholder="0" onChange={setRateChange} />
+                </div>
+              </div>
             )}
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Results suffix
@@ -293,7 +419,7 @@ export default function RightPanel() {
             </Button>
             <Button disabled={!canRun} onClick={() => void handleRun()}>
             {activeJobStatus === 'running' ? <Loader2 aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}
-            {activeJobStatus === 'running' ? 'Running' : 'Run Carbon'}
+            {activeJobStatus === 'running' ? 'Running' : selectedModelId === 'carbon' ? 'Run Carbon' : 'Not available'}
             </Button>
           </div>
 
@@ -477,6 +603,66 @@ function AssetSelect({
         )}
       </select>
     </label>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="flex flex-col gap-1.5 text-xs font-medium text-slate-700">
+      {label}
+      <Input
+        type="number"
+        value={value}
+        placeholder={placeholder}
+        onChange={event => onChange(event.target.value)}
+      />
+    </label>
+  )
+}
+
+function SchemaSummary({ inputs }: { inputs: ModelInputSpec[] }) {
+  const visibleInputs = inputs.filter(input => !input.hidden)
+  if (visibleInputs.length === 0) return null
+
+  const groups = visibleInputs.reduce<Record<string, ModelInputSpec[]>>((acc, input) => {
+    const group = input.group ?? 'Parameters'
+    acc[group] = [...(acc[group] ?? []), input]
+    return acc
+  }, {})
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600">
+      <div className="mb-2 font-semibold text-slate-800">Schema-driven parameter map</div>
+      <div className="space-y-2">
+        {Object.entries(groups).map(([group, groupInputs]) => (
+          <div key={group}>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{group}</div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {groupInputs.map(input => (
+                <span
+                  key={input.id}
+                  className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5"
+                  title={input.help}
+                >
+                  {input.label}
+                  {(input.required || input.required_if) && <span className="text-red-500"> *</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
